@@ -1,0 +1,6 @@
+CREATE TABLE dotfiles(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    date DATETIME NOT NULL
+);
