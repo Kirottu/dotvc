@@ -23,21 +23,17 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .httpz = .{
-            .url = "git+https://github.com/karlseguin/http.zig?ref=zig-0.13#2a910af45a6a733adbcf9e5e56642c05f4f5c769",
-            .hash = "12203254adcaba63705ff7ecf1894a5a26d5a5a0a9cfecd01423775fa5566b625138",
-        },
         .sqlite = .{
-            .url = "git+https://github.com/vrischmann/zig-sqlite?ref=zig-0.13.0#7f4be7d30b126affb66b390c7825addb1c3506bd",
-            .hash = "1220940ae067451e7e6824e9b92baceac93b0bd6fa9ffd315179cc9a7ce5430a46ac",
+            .url = "git+https://github.com/vrischmann/zig-sqlite#0155a63a7efb64da6c535ee31e92ec421712951a",
+            .hash = "1220bbf36166a56f03ca55c2f455f70cdb3dd5f8dca1f7c78e57d9402add9635b2b9",
         },
         .yazap = .{
-            .url = "git+https://github.com/prajwalch/yazap?ref=v0.5.1#c84a17de0103abcfd90d184d44749aa197fbd87d",
-            .hash = "12208664f483e9ce606cdbdcb52b1caea79786654d5897aa7dd5b91d3b9cf3d6ffce",
+            .url = "git+https://github.com/prajwalch/yazap#c2e3122d5dd6192513ba590f229dbc535110efb8",
+            .hash = "122054439ec36ac10987c87ae69f3b041b40b2e451af3fe3ef1fc578b3bad756a800",
         },
-        .args = .{
-            .url = "git+https://github.com/ikskuh/zig-args?ref=zig-0.13.x#1df15086e5d1b245acedadbec03440bb37871e5e",
-            .hash = "1220904d2fdcd970dd0d216211d092eb3ef6da01117163cc9393ab845a1d66c029d9",
+        .@"zig-toml" = .{
+            .url = "git+https://github.com/sam701/zig-toml#92b50b47233ab8b3cac127cbd2a21e68b5ffb95a",
+            .hash = "12201706c8eb1683204755109d1ae7087df48e6bf594c6d2aab6600b28e656df631e",
         },
     },
     .paths = .{

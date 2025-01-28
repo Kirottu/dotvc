@@ -22,16 +22,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const sqlite = b.dependency("sqlite", .{
+    exe.root_module.addImport("zig-toml", b.dependency("zig-toml", .{
         .target = target,
         .optimize = optimize,
-    });
-
-    exe.root_module.addImport("yazap", b.dependency("yazap", .{
+    }).module("zig-toml"));
+    exe.root_module.addImport("yazap", b.dependency("yazap", .{}).module("yazap"));
+    exe.root_module.addImport("sqlite", b.dependency("sqlite", .{
         .target = target,
         .optimize = optimize,
-    }).module("yazap"));
-    exe.root_module.addImport("sqlite", sqlite.module("sqlite"));
+    }).module("sqlite"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

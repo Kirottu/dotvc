@@ -1,0 +1,23 @@
+# Example config, replace values to fit your needs.
+
+[client]
+editor = "helix"
+
+#[daemon]
+# TODO: dotvc daemon config
+
+#[sync]
+# TODO: dotvc sync config
+
+[[watch_paths]]
+# If the path leads to a directory, all the files in the directory are added to dotvc.
+# Does not add subdirectories.
+path = "/home/kirottu/.config/anyrun/"
+# Tags can be used to search for multiple config files related to a specific program
+# or technology.
+tags = ["anyrun", "wayland", "runner"]
+
+[[watch_paths]]
+# A path that leads to a single file is watched as is
+path = "/home/kirottu/.config/watershot.ron"
+tags = ["watershot", "wayland", "screenshot"]

@@ -4,3 +4,8 @@ CREATE TABLE dotfiles(
     content TEXT NOT NULL,
     date DATETIME NOT NULL
 );
+
+CREATE TABLE tags(
+    name VARCHAR(20) NOT NULL,
+    FOREIGN KEY(id) REFERENCES dotfiles(id)
+)
