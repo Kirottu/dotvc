@@ -6,12 +6,8 @@ const daemon = @import("daemon/daemon.zig");
 const client = @import("client/client.zig");
 
 pub const Config = struct {
-    client: *ClientConfig,
-    watch_paths: []const WatchPath,
-};
-
-pub const ClientConfig = struct {
     editor: []const u8,
+    watch_paths: []const WatchPath,
 };
 
 pub const WatchPath = struct {
@@ -59,17 +55,9 @@ pub fn main() !u8 {
         return 1;
     };
 
-    var parser = toml.Parser(Config).init(allocator);
-    defer parser.deinit();
-
-    var result = try parser.parseFile(config_path);
-    defer result.deinit();
-
-    const config = result.value;
-
     if (matches.subcommandMatches("daemon")) |daemon_match| {
         const data_dir = daemon_match.getSingleValue("data-dir");
-        try daemon.run(allocator, config, config_path, data_dir);
+        try daemon.run(allocator, config_path, data_dir);
     } else {
         try client.run(allocator);
     }

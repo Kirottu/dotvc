@@ -1,17 +1,25 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const toml = @import("zig-toml");
 
 const ipc = @import("ipc.zig");
 const inotify = @import("inotify.zig");
+const database = @import("database.zig");
 const root = @import("../main.zig");
-
-const DB_SCHEMA = @embedFile("res/schema.sql");
 
 pub const DaemonError = error{
     InvalidDataDir,
 };
 
-pub fn run(allocator: std.mem.Allocator, config: root.Config, _: []const u8, cli_data_dir: ?[]const u8) !void {
+pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: ?[]const u8) !void {
+    var parser = toml.Parser(root.Config).init(allocator);
+    defer parser.deinit();
+
+    var result = try parser.parseFile(config_path);
+    defer result.deinit();
+
+    var config = result.value;
+
     const data_dir = if (cli_data_dir) |path| path else dir: {
         const data_dir_postfix = "/dotvc/";
 
@@ -41,38 +49,36 @@ pub fn run(allocator: std.mem.Allocator, config: root.Config, _: []const u8, cli
         std.log.err("Failed to create dotvc data directory {s}: {}", .{ data_dir, err });
     };
 
-    // Add 0-sentinel termination as SQlite expects that
-    const sentinel_db_path = try std.mem.concatWithSentinel(
-        allocator,
-        u8,
-        &[_][]const u8{ data_dir, "database.db" },
-        0,
-    );
-    defer allocator.free(sentinel_db_path);
+    var buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
+    const hostname = try std.posix.gethostname(&buf);
 
-    var db = try sqlite.Db.init(.{
-        .mode = sqlite.Db.Mode{ .File = sentinel_db_path },
-        .open_flags = .{
-            .write = true,
-            .create = true,
-        },
-    });
-    defer db.deinit();
+    const db_path = try std.mem.concat(allocator, u8, &[_][]const u8{ data_dir, hostname, ".db" });
 
+    _ = try database.Database.init(allocator, db_path);
     var ipc_manager = try ipc.Ipc.init(allocator);
     var watcher = try inotify.Inotify.init(allocator);
+    // Map to assiciate the watcher ID with the config entry
+    var watcher_map = std.AutoHashMap(u64, *const root.WatchPath).init(allocator);
 
     defer ipc_manager.deinit();
     defer watcher.deinit();
+    defer watcher_map.deinit();
 
-    for (config.watch_paths) |watch_path| {
+    for (config.watch_paths) |*watch_path| {
         std.log.info("Adding watcher for: {s}", .{watch_path.path});
-        try watcher.addWatcher(watch_path.path);
+        const id = watcher.addWatcher(watch_path.path) catch |err| {
+            std.log.err("Error creating watcher for path {s}: {}. Skipping directory", .{ watch_path.path, err });
+            continue;
+        };
+
+        try watcher_map.put(id, watch_path);
     }
 
     // Main daemon event loop
     while (true) {
         const messages = try ipc_manager.readMessages();
+        defer messages.deinit();
+
         for (messages.items) |msg| {
             switch (msg.ipc_msg.value) {
                 .shutdown => {
@@ -81,18 +87,38 @@ pub fn run(allocator: std.mem.Allocator, config: root.Config, _: []const u8, cli
                     try ipc_manager.disconnectClient(msg.client);
                     return;
                 },
-                .reload_config => unreachable,
+                .reload_config => {
+                    std.log.info("Reloading config...", .{});
+                    try msg.client.reply(ipc.IpcResponse{ .ok = ipc.IpcResponseOk{} });
+                    try ipc_manager.disconnectClient(msg.client);
+                    result.deinit();
+                    result = try parser.parseFile(config_path);
+                    config = result.value;
+
+                    watcher_map.clearRetainingCapacity();
+
+                    watcher.purgeWatchers();
+                    for (config.watch_paths) |*watch_path| {
+                        std.log.info("Adding watcher for: {s}", .{watch_path.path});
+                        const id = watcher.addWatcher(watch_path.path) catch |err| {
+                            std.log.err("Error creating watcher for path {s}: {}. Skipping directory", .{ watch_path.path, err });
+                            continue;
+                        };
+
+                        try watcher_map.put(id, watch_path);
+                    }
+                },
             }
         }
 
         const events = try watcher.readEvents();
-        if (events) |_events| {
-            defer allocator.free(_events);
+        defer events.deinit();
 
-            for (_events) |event| {
-                std.log.info("Ancestor: {s}, name: {?s}", .{ event.ancestor, event.name });
-                try event.printMask();
-            }
+        for (events.items) |event| {
+            std.log.info("Ancestor: {s}, name: {?s}", .{ event.ancestor, event.name });
+            try event.printMask();
+            _ = watcher_map.get(event.watcher_id);
+            // TODO: Actually do something with the events
         }
 
         std.time.sleep(std.time.ns_per_ms * 10);

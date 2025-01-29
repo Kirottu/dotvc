@@ -9,7 +9,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
     var buf = std.ArrayList(u8).init(allocator);
 
-    try std.json.stringify(ipc.IpcMsg{ .shutdown = ipc.IpcShutdownMsg{} }, .{}, buf.writer());
+    try std.json.stringify(ipc.IpcMsg{ .reload_config = ipc.IpcReloadConfigMsg{} }, .{}, buf.writer());
 
     try buf.append('\n');
 

@@ -1,6 +1,4 @@
 # Example config, replace values to fit your needs.
-
-[client]
 editor = "helix"
 
 #[daemon]
@@ -21,3 +19,11 @@ tags = ["anyrun", "wayland", "runner"]
 # A path that leads to a single file is watched as is
 path = "/home/kirottu/.config/watershot.ron"
 tags = ["watershot", "wayland", "screenshot"]
+
+[[watch_paths]]
+path = "/home/kirottu/.config/helix/config.toml"
+tags = ["editor", "helix"]
+
+[[watch_paths]]
+path = "/tmp/test"
+tags = ["test"]
