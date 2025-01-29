@@ -1,11 +1,1 @@
-CREATE TABLE dotfiles(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    path TEXT NOT NULL,
-    content TEXT NOT NULL,
-    date DATETIME NOT NULL
-);
 
-CREATE TABLE tags(
-    name VARCHAR(20) NOT NULL,
-    FOREIGN KEY(id) REFERENCES dotfiles(id)
-)

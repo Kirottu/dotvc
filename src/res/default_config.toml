@@ -1,5 +1,8 @@
 # Example config, replace values to fit your needs.
 editor = "helix"
+global_ignore = [
+  "*.bck"
+]
 
 #[daemon]
 # TODO: dotvc daemon config

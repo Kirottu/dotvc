@@ -2,11 +2,6 @@ const std = @import("std");
 
 pub const SOCKET_PATH = "/tmp/dotvc.sock";
 
-pub const MsgTag = enum {
-    shutdown,
-    reload_config,
-};
-
 pub const Msg = struct {
     client: *Client,
     ipc_msg: std.json.Parsed(IpcMsg),
@@ -17,22 +12,43 @@ pub const Msg = struct {
 };
 
 /// The messages that are actually passed through the IPC
-pub const IpcMsg = union(MsgTag) {
-    shutdown: IpcShutdownMsg,
-    reload_config: IpcReloadConfigMsg,
+pub const IpcMsg = union(enum) {
+    shutdown,
+    reload_config,
+    index_all,
+    get_all_dotfiles,
+    get_dotfile: GetDotfile,
 };
 
-pub const IpcShutdownMsg = struct {};
-pub const IpcReloadConfigMsg = struct {};
+pub const GetDotfile = struct {
+    rowid: i64,
+};
 
-pub const IpcResponseTag = enum {
+pub const IpcResponse = union(enum) {
     ok,
-};
-pub const IpcResponse = union(IpcResponseTag) {
-    ok: IpcResponseOk,
+    dotfiles: IpcresponseDotfiles,
+    dotfile: IpcResponseDotfile,
 };
 
-pub const IpcResponseOk = struct {};
+pub const IpcresponseDotfiles = struct {
+    dotfiles: []const IpcDistilledDotfile,
+};
+pub const IpcResponseDotfile = struct {
+    dotfile: IpcDotfile,
+};
+
+pub const IpcDotfile = struct {
+    path: []const u8,
+    content: []const u8,
+};
+
+/// Simplified dotfile type to avoid sending all dotfile content over IPC unnecessarily
+pub const IpcDistilledDotfile = struct {
+    rowid: i64,
+    date: i64,
+    path: []const u8,
+    tags: [][]const u8,
+};
 
 pub const Client = struct {
     socket: std.posix.socket_t,

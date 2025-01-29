@@ -5,8 +5,14 @@ const toml = @import("zig-toml");
 const daemon = @import("daemon/daemon.zig");
 const client = @import("client/client.zig");
 
+// Recurse all tests from all files in the project
+comptime {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 pub const Config = struct {
     editor: []const u8,
+    global_ignore: [][]const u8,
     watch_paths: []const WatchPath,
 };
 
@@ -25,10 +31,12 @@ pub fn main() !u8 {
 
     var cli = app.rootCommand();
     try cli.addArg(yazap.Arg.singleValueOption("config", 'c', "Override config file location"));
+
+    const search = app.createCommand("search", "Interactively search for dotfiles");
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommand(daemon_cli);
+    try cli.addSubcommands(&[_]yazap.Command{ search, daemon_cli });
 
     const matches = try app.parseProcess();
 
@@ -59,7 +67,7 @@ pub fn main() !u8 {
         const data_dir = daemon_match.getSingleValue("data-dir");
         try daemon.run(allocator, config_path, data_dir);
     } else {
-        try client.run(allocator);
+        try client.run(allocator, matches);
     }
     return 0;
 }

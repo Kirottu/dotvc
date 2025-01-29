@@ -35,6 +35,14 @@
             .url = "git+https://github.com/sam701/zig-toml#92b50b47233ab8b3cac127cbd2a21e68b5ffb95a",
             .hash = "12201706c8eb1683204755109d1ae7087df48e6bf594c6d2aab6600b28e656df631e",
         },
+        .vaxis = .{
+            .url = "git+https://github.com/rockorager/libvaxis?ref=zig-0.14.0#9ffbae61f46fba103b089b31fcbf7cea1ba35099",
+            .hash = "1220ac04f500bd0ef76e24ee93dda2c46718db26eb2bceb2acb5e3694f98745ef8c1",
+        },
+        .fuzzig = .{
+            .url = "git+https://github.com/fjebaker/fuzzig#44c04733c7c0fee3db83672aaaaf4ed03e943156",
+            .hash = "1220666c7afe30f6a51ae477f7755e9b6a5341723bfcb5de349817b5d0912b96f9ad",
+        },
     },
     .paths = .{
         "build.zig",

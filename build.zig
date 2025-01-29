@@ -22,15 +22,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.root_module.addImport("zig-toml", b.dependency("zig-toml", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("zig-toml"));
-    exe.root_module.addImport("yazap", b.dependency("yazap", .{}).module("yazap"));
-    exe.root_module.addImport("sqlite", b.dependency("sqlite", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("sqlite"));
+    const zig_toml = b.dependency("zig-toml", .{}).module("zig-toml");
+    const yazap = b.dependency("yazap", .{}).module("yazap");
+    const sqlite = b.dependency("sqlite", .{}).module("sqlite");
+    const vaxis = b.dependency("vaxis", .{}).module("vaxis");
+    const fuzzig = b.dependency("fuzzig", .{}).module("fuzzig");
+
+    exe.root_module.addImport("zig-toml", zig_toml);
+    exe.root_module.addImport("yazap", yazap);
+    exe.root_module.addImport("sqlite", sqlite);
+    exe.root_module.addImport("vaxis", vaxis);
+    exe.root_module.addImport("fuzzig", fuzzig);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -65,6 +67,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    exe_unit_tests.root_module.addImport("zig-toml", zig_toml);
+    exe_unit_tests.root_module.addImport("yazap", yazap);
+    exe_unit_tests.root_module.addImport("sqlite", sqlite);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
