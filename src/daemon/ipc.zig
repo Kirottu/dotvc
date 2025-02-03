@@ -11,32 +11,24 @@ pub const Msg = struct {
     }
 };
 
+pub const IpcNone = struct {};
+
 /// The messages that are actually passed through the IPC
 pub const IpcMsg = union(enum) {
-    shutdown,
-    reload_config,
-    index_all,
-    get_all_dotfiles,
-    get_dotfile: GetDotfile,
-};
-
-pub const GetDotfile = struct {
-    rowid: i64,
+    shutdown: IpcNone,
+    reload_config: IpcNone,
+    index_all: IpcNone,
+    get_all_dotfiles: IpcNone,
+    get_dotfile: i64,
 };
 
 pub const IpcResponse = union(enum) {
-    ok,
-    dotfiles: IpcresponseDotfiles,
-    dotfile: IpcResponseDotfile,
-};
-
-pub const IpcresponseDotfiles = struct {
+    ok: IpcNone,
     dotfiles: []const IpcDistilledDotfile,
-};
-pub const IpcResponseDotfile = struct {
-    dotfile: IpcDotfile,
+    dotfile: IpcDistilledDotfile,
 };
 
+/// Dotfile ready for writing into the filesystem or editing
 pub const IpcDotfile = struct {
     path: []const u8,
     content: []const u8,
@@ -64,6 +56,8 @@ pub const Client = struct {
         var buf = std.ArrayList(u8).init(self.allocator);
         defer buf.deinit();
         try std.json.stringify(response, .{}, buf.writer());
+
+        try buf.append('\n');
 
         _ = try std.posix.send(self.socket, buf.items, std.posix.SOCK.NONBLOCK);
     }
@@ -135,12 +129,25 @@ pub const Ipc = struct {
         try self.acceptClients();
 
         var messages = std.ArrayList(Msg).init(self.allocator);
+        var pending_disconnection = std.ArrayList(*Client).init(self.allocator);
+        defer pending_disconnection.deinit();
 
         for (self.clients.items) |*client| {
             const read =
-                std.posix.recv(client.socket, client.buf[client.offset..], std.posix.SOCK.NONBLOCK) catch {
-                continue;
+                std.posix.recv(client.socket, client.buf[client.offset..], std.posix.SOCK.NONBLOCK) catch |err| {
+                if (err == error.WouldBlock) {
+                    continue;
+                } else {
+                    std.log.info("Unexpected IPC recv error: {}", .{err});
+                    continue;
+                }
             };
+
+            if (read == 0) {
+                try pending_disconnection.append(client);
+                continue;
+            }
+
             client.offset += read;
             if (client.offset != 0 and client.buf[client.offset - 1] == '\n') {
                 const ipc_msg = try std.json.parseFromSlice(IpcMsg, self.allocator, client.buf[0 .. client.offset - 1], .{});
@@ -151,6 +158,10 @@ pub const Ipc = struct {
                 client.offset = 0;
                 try messages.append(msg);
             }
+        }
+
+        for (pending_disconnection.items) |client| {
+            try self.disconnectClient(client);
         }
 
         return messages;

@@ -24,6 +24,12 @@ pub const WatchPath = struct {
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) {
+            std.log.err("memory leak", .{});
+        }
+    }
     const allocator = gpa.allocator();
 
     var app = yazap.App.init(allocator, "dotvc", "Version control for your dotfiles");
@@ -32,7 +38,7 @@ pub fn main() !u8 {
     var cli = app.rootCommand();
     try cli.addArg(yazap.Arg.singleValueOption("config", 'c', "Override config file location"));
 
-    const search = app.createCommand("search", "Interactively search for dotfiles");
+    const search = app.createCommand("interactive", "Interactively search for dotfiles");
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 

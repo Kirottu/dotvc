@@ -84,13 +84,13 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             switch (msg.ipc_msg.value) {
                 .shutdown => {
                     std.log.info("Shutting down daemon...", .{});
-                    try msg.client.reply(ipc.IpcResponse.ok);
+                    try msg.client.reply(ipc.IpcResponse{ .ok = ipc.IpcNone{} });
                     try ipc_manager.disconnectClient(msg.client);
                     return;
                 },
                 .reload_config => {
                     std.log.info("Reloading config...", .{});
-                    try msg.client.reply(ipc.IpcResponse.ok);
+                    try msg.client.reply(ipc.IpcResponse{ .ok = ipc.IpcNone{} });
                     try ipc_manager.disconnectClient(msg.client);
                     result.deinit();
                     result = try parser.parseFile(config_path);
@@ -110,7 +110,26 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                     }
                 },
                 .index_all => unreachable,
-                .get_all_dotfiles => unreachable,
+                .get_all_dotfiles => {
+                    const db_dotfiles = try db.getDotfiles();
+                    const ipc_dotfile_buf = try allocator.alloc(ipc.IpcDistilledDotfile, db_dotfiles.len);
+
+                    defer allocator.free(db_dotfiles);
+                    defer allocator.free(ipc_dotfile_buf);
+
+                    for (0.., db_dotfiles) |i, tuple| {
+                        const dotfile, const id = tuple;
+
+                        ipc_dotfile_buf[i] = ipc.IpcDistilledDotfile{
+                            .rowid = id,
+                            .date = dotfile.date,
+                            .path = dotfile.path,
+                            .tags = dotfile.tags,
+                        };
+                    }
+
+                    try msg.client.reply(ipc.IpcResponse{ .dotfiles = ipc_dotfile_buf });
+                },
                 .get_dotfile => unreachable,
             }
         }

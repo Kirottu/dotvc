@@ -1,10 +1,20 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 
+const ipc = @import("ipc.zig");
+
 pub const Dotfile = struct {
     path: []const u8,
     content: []const u8,
     tags: [][]const u8,
+    date: i64,
+};
+
+/// Helper struct for pulling data out of the database
+const DbDotfile = struct {
+    id: i64,
+    path: []const u8,
+    content: []const u8,
     date: i64,
 };
 
@@ -92,6 +102,59 @@ pub const Database = struct {
         for (dotfile.tags) |tag| {
             try insert_tag.exec(.{}, .{ .dotfile_id = id, .name = tag });
         }
+    }
+
+    /// Get all dotfiles from the database in a distilled form (content omitted)
+    pub fn getDotfiles(self: *Database) ![]struct { Dotfile, i64 } {
+        var get_dotfiles = try self.db.prepare(
+            \\SELECT * FROM dotfiles;
+        );
+        var get_tags = try self.db.prepare(
+            \\SELECT (name) FROM tags WHERE dotfile_id = ?;
+        );
+        defer get_dotfiles.deinit();
+        defer get_tags.deinit();
+        const dotfiles = try get_dotfiles.all(DbDotfile, self.allocator, .{}, .{});
+
+        const dotfile_buf = try self.allocator.alloc(struct { Dotfile, i64 }, dotfiles.len);
+
+        for (0.., dotfiles) |i, db_dotfile| {
+            get_tags.reset();
+            const tags = try get_tags.all([]const u8, self.allocator, .{}, .{ .dotfile_id = db_dotfile.id });
+            dotfile_buf[i] = .{
+                Dotfile{
+                    .path = db_dotfile.path,
+                    .content = db_dotfile.content,
+                    .tags = tags,
+                    .date = db_dotfile.date,
+                },
+                db_dotfile.id,
+            };
+        }
+
+        return dotfile_buf;
+    }
+
+    /// Get a single dotfile from the database
+    pub fn getDotfile(self: *Database, rowid: i64) !Dotfile {
+        var get_dotfile = try self.db.prepare(
+            \\SELECT * FROM dotfiles WHERE id = ?;
+        );
+        var get_tags = try self.db.prepare(
+            \\SELECT (name) FROM tags WHERE dotfile_id = ?;
+        );
+        defer get_dotfile.deinit();
+        defer get_tags.deinit();
+
+        const dotfile = try get_dotfile.one(DbDotfile, .{}, .{ .id = rowid });
+        const tags = try get_tags.all([]const u8, .{}, .{ .dotfile_id = rowid });
+
+        return Dotfile{
+            .path = dotfile.path,
+            .content = dotfile.content,
+            .tags = tags,
+            .date = dotfile.date,
+        };
     }
 
     pub fn deinit(self: *Database) void {
