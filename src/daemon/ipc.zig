@@ -1,14 +1,11 @@
 const std = @import("std");
+const root = @import("../main.zig");
 
 pub const SOCKET_PATH = "/tmp/dotvc.sock";
 
 pub const Msg = struct {
     client: *Client,
-    ipc_msg: std.json.Parsed(IpcMsg),
-
-    pub fn deinit(self: Msg) void {
-        self.ipc_msg.deinit();
-    }
+    ipc_msg: IpcMsg,
 };
 
 pub const IpcNone = struct {};
@@ -25,7 +22,7 @@ pub const IpcMsg = union(enum) {
 pub const IpcResponse = union(enum) {
     ok: IpcNone,
     dotfiles: []const IpcDistilledDotfile,
-    dotfile: IpcDistilledDotfile,
+    dotfile: IpcDotfile,
 };
 
 /// Dotfile ready for writing into the filesystem or editing
@@ -125,10 +122,12 @@ pub const Ipc = struct {
         }
     }
 
-    pub fn readMessages(self: *Ipc) !std.ArrayList(Msg) {
+    pub fn readMessages(self: *Ipc) !root.ArenaOutput(std.ArrayList(Msg)) {
         try self.acceptClients();
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        const allocator = arena.allocator();
 
-        var messages = std.ArrayList(Msg).init(self.allocator);
+        var messages = std.ArrayList(Msg).init(allocator);
         var pending_disconnection = std.ArrayList(*Client).init(self.allocator);
         defer pending_disconnection.deinit();
 
@@ -150,7 +149,7 @@ pub const Ipc = struct {
 
             client.offset += read;
             if (client.offset != 0 and client.buf[client.offset - 1] == '\n') {
-                const ipc_msg = try std.json.parseFromSlice(IpcMsg, self.allocator, client.buf[0 .. client.offset - 1], .{});
+                const ipc_msg = try std.json.parseFromSliceLeaky(IpcMsg, allocator, client.buf[0 .. client.offset - 1], .{});
                 const msg = Msg{
                     .client = client,
                     .ipc_msg = ipc_msg,
@@ -164,7 +163,10 @@ pub const Ipc = struct {
             try self.disconnectClient(client);
         }
 
-        return messages;
+        return .{
+            .arena = arena,
+            .value = messages,
+        };
     }
 
     pub fn disconnectClient(self: *Ipc, client: *Client) !void {

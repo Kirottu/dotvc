@@ -22,6 +22,17 @@ pub const WatchPath = struct {
     ignore: ?[][]const u8,
 };
 
+pub fn ArenaOutput(comptime T: type) type {
+    return struct {
+        arena: std.heap.ArenaAllocator,
+        value: T,
+
+        pub fn deinit(self: @This()) void {
+            self.arena.deinit();
+        }
+    };
+}
+
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -38,11 +49,13 @@ pub fn main() !u8 {
     var cli = app.rootCommand();
     try cli.addArg(yazap.Arg.singleValueOption("config", 'c', "Override config file location"));
 
-    const search = app.createCommand("interactive", "Interactively search for dotfiles");
+    const interactive = app.createCommand("interactive", "Interactively search for dotfiles");
+    const kill = app.createCommand("kill", "Gracefully shutdown the daemon");
+
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommands(&[_]yazap.Command{ search, daemon_cli });
+    try cli.addSubcommands(&[_]yazap.Command{ interactive, kill, daemon_cli });
 
     const matches = try app.parseProcess();
 
@@ -73,7 +86,7 @@ pub fn main() !u8 {
         const data_dir = daemon_match.getSingleValue("data-dir");
         try daemon.run(allocator, config_path, data_dir);
     } else {
-        try client.run(allocator, matches);
+        try client.run(allocator, matches, config_path);
     }
     return 0;
 }

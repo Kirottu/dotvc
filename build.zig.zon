@@ -43,6 +43,10 @@
             .url = "git+https://github.com/fjebaker/fuzzig#44c04733c7c0fee3db83672aaaaf4ed03e943156",
             .hash = "1220666c7afe30f6a51ae477f7755e9b6a5341723bfcb5de349817b5d0912b96f9ad",
         },
+        .zeit = .{
+            .url = "git+https://github.com/rockorager/zeit#8fd203f85f597f16e0a525c1f1ca1e0bffded809",
+            .hash = "122022233835adc719535a8e7cefdd2902a67bbfb7ef198441ca9ce89c0593f488c2",
+        },
     },
     .paths = .{
         "build.zig",

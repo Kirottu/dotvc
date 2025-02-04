@@ -27,7 +27,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             const path = try std.mem.concat(
                 allocator,
                 u8,
-                &[_][]const u8{ data_home, data_dir_postfix },
+                &.{ data_home, data_dir_postfix },
             );
             break :dir path;
         }
@@ -36,7 +36,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             const path = try std.mem.concat(
                 allocator,
                 u8,
-                &[_][]const u8{ home, "/.local/share", data_dir_postfix },
+                &.{ home, "/.local/share", data_dir_postfix },
             );
             break :dir path;
         }
@@ -44,6 +44,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
         std.log.err("Unable to determine data directory", .{});
         return DaemonError.InvalidDataDir;
     };
+    defer allocator.free(data_dir);
 
     std.fs.cwd().makePath(data_dir) catch |err| {
         std.log.err("Failed to create dotvc data directory {s}: {}", .{ data_dir, err });
@@ -52,7 +53,8 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
     var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
     const hostname = try std.posix.gethostname(&hostname_buf);
 
-    const db_path = try std.mem.concat(allocator, u8, &[_][]const u8{ data_dir, hostname, ".db" });
+    const db_path = try std.mem.concat(allocator, u8, &.{ data_dir, hostname, ".db" });
+    defer allocator.free(db_path);
 
     var db = try database.Database.init(allocator, db_path, false);
     var ipc_manager = try ipc.Ipc.init(allocator);
@@ -80,8 +82,8 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
         const messages = try ipc_manager.readMessages();
         defer messages.deinit();
 
-        for (messages.items) |msg| {
-            switch (msg.ipc_msg.value) {
+        for (messages.value.items) |msg| {
+            switch (msg.ipc_msg) {
                 .shutdown => {
                     std.log.info("Shutting down daemon...", .{});
                     try msg.client.reply(ipc.IpcResponse{ .ok = ipc.IpcNone{} });
@@ -91,7 +93,6 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                 .reload_config => {
                     std.log.info("Reloading config...", .{});
                     try msg.client.reply(ipc.IpcResponse{ .ok = ipc.IpcNone{} });
-                    try ipc_manager.disconnectClient(msg.client);
                     result.deinit();
                     result = try parser.parseFile(config_path);
                     config = result.value;
@@ -112,12 +113,12 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                 .index_all => unreachable,
                 .get_all_dotfiles => {
                     const db_dotfiles = try db.getDotfiles();
-                    const ipc_dotfile_buf = try allocator.alloc(ipc.IpcDistilledDotfile, db_dotfiles.len);
+                    const ipc_dotfile_buf = try allocator.alloc(ipc.IpcDistilledDotfile, db_dotfiles.value.len);
 
-                    defer allocator.free(db_dotfiles);
+                    defer db_dotfiles.deinit();
                     defer allocator.free(ipc_dotfile_buf);
 
-                    for (0.., db_dotfiles) |i, tuple| {
+                    for (0.., db_dotfiles.value) |i, tuple| {
                         const dotfile, const id = tuple;
 
                         ipc_dotfile_buf[i] = ipc.IpcDistilledDotfile{
@@ -130,7 +131,14 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
 
                     try msg.client.reply(ipc.IpcResponse{ .dotfiles = ipc_dotfile_buf });
                 },
-                .get_dotfile => unreachable,
+                .get_dotfile => |rowid| {
+                    const dotfile = try db.getDotfile(rowid);
+                    defer dotfile.deinit();
+
+                    try msg.client.reply(ipc.IpcResponse{
+                        .dotfile = ipc.IpcDotfile{ .path = dotfile.value.path, .content = dotfile.value.content },
+                    });
+                },
             }
         }
 
@@ -167,7 +175,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             const path = try std.mem.concat(
                 allocator,
                 u8,
-                &[_][]const u8{ event.ancestor, "/", event.name },
+                &.{ event.ancestor, event.name },
             );
             defer allocator.free(path);
 

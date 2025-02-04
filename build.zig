@@ -27,12 +27,14 @@ pub fn build(b: *std.Build) void {
     const sqlite = b.dependency("sqlite", .{}).module("sqlite");
     const vaxis = b.dependency("vaxis", .{}).module("vaxis");
     const fuzzig = b.dependency("fuzzig", .{}).module("fuzzig");
+    const zeit = b.dependency("zeit", .{}).module("zeit");
 
     exe.root_module.addImport("zig-toml", zig_toml);
     exe.root_module.addImport("yazap", yazap);
     exe.root_module.addImport("sqlite", sqlite);
     exe.root_module.addImport("vaxis", vaxis);
     exe.root_module.addImport("fuzzig", fuzzig);
+    exe.root_module.addImport("zeit", zeit);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

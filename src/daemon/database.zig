@@ -2,6 +2,7 @@ const std = @import("std");
 const sqlite = @import("sqlite");
 
 const ipc = @import("ipc.zig");
+const root = @import("../main.zig");
 
 pub const Dotfile = struct {
     path: []const u8,
@@ -94,6 +95,7 @@ pub const Database = struct {
             .date = dotfile.date,
         });
         const id = self.db.getLastInsertRowID();
+        std.log.info("{}", .{id});
         var insert_tag = try self.db.prepare(
             \\INSERT INTO tags(dotfile_id, name) VALUES(?, ?);  
         );
@@ -101,11 +103,14 @@ pub const Database = struct {
 
         for (dotfile.tags) |tag| {
             try insert_tag.exec(.{}, .{ .dotfile_id = id, .name = tag });
+            insert_tag.reset();
         }
     }
 
     /// Get all dotfiles from the database in a distilled form (content omitted)
-    pub fn getDotfiles(self: *Database) ![]struct { Dotfile, i64 } {
+    pub fn getDotfiles(self: *Database) !root.ArenaOutput([]struct { Dotfile, i64 }) {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        const allocator = arena.allocator();
         var get_dotfiles = try self.db.prepare(
             \\SELECT * FROM dotfiles;
         );
@@ -114,13 +119,13 @@ pub const Database = struct {
         );
         defer get_dotfiles.deinit();
         defer get_tags.deinit();
-        const dotfiles = try get_dotfiles.all(DbDotfile, self.allocator, .{}, .{});
+        const dotfiles = try get_dotfiles.all(DbDotfile, allocator, .{}, .{});
 
-        const dotfile_buf = try self.allocator.alloc(struct { Dotfile, i64 }, dotfiles.len);
+        const dotfile_buf = try allocator.alloc(struct { Dotfile, i64 }, dotfiles.len);
 
         for (0.., dotfiles) |i, db_dotfile| {
             get_tags.reset();
-            const tags = try get_tags.all([]const u8, self.allocator, .{}, .{ .dotfile_id = db_dotfile.id });
+            const tags = try get_tags.all([]const u8, allocator, .{}, .{ .dotfile_id = db_dotfile.id });
             dotfile_buf[i] = .{
                 Dotfile{
                     .path = db_dotfile.path,
@@ -132,11 +137,13 @@ pub const Database = struct {
             };
         }
 
-        return dotfile_buf;
+        return .{ .arena = arena, .value = dotfile_buf };
     }
 
     /// Get a single dotfile from the database
-    pub fn getDotfile(self: *Database, rowid: i64) !Dotfile {
+    pub fn getDotfile(self: *Database, rowid: i64) !root.ArenaOutput(Dotfile) {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        const allocator = arena.allocator();
         var get_dotfile = try self.db.prepare(
             \\SELECT * FROM dotfiles WHERE id = ?;
         );
@@ -146,14 +153,17 @@ pub const Database = struct {
         defer get_dotfile.deinit();
         defer get_tags.deinit();
 
-        const dotfile = try get_dotfile.one(DbDotfile, .{}, .{ .id = rowid });
-        const tags = try get_tags.all([]const u8, .{}, .{ .dotfile_id = rowid });
+        const dotfile = (try get_dotfile.oneAlloc(DbDotfile, allocator, .{}, .{ .id = rowid })) orelse unreachable;
+        const tags = try get_tags.all([]const u8, allocator, .{}, .{ .dotfile_id = rowid });
 
-        return Dotfile{
-            .path = dotfile.path,
-            .content = dotfile.content,
-            .tags = tags,
-            .date = dotfile.date,
+        return .{
+            .arena = arena,
+            .value = Dotfile{
+                .path = dotfile.path,
+                .content = dotfile.content,
+                .tags = tags,
+                .date = dotfile.date,
+            },
         };
     }
 
