@@ -33,6 +33,12 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
+    const httpz = b.dependency("httpz", .{});
+    const myzql = b.dependency("myzql", .{});
+
+    exe.root_module.addImport("httpz", httpz.module("httpz"));
+    exe.root_module.addImport("myzql", myzql.module("myzql"));
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
