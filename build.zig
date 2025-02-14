@@ -28,6 +28,8 @@ pub fn build(b: *std.Build) void {
     const vaxis = b.dependency("vaxis", .{}).module("vaxis");
     const fuzzig = b.dependency("fuzzig", .{}).module("fuzzig");
     const zeit = b.dependency("zeit", .{}).module("zeit");
+    const httpz = b.dependency("httpz", .{}).module("httpz");
+    const myzql = b.dependency("myzql", .{}).module("myzql");
 
     exe.root_module.addImport("zig-toml", zig_toml);
     exe.root_module.addImport("yazap", yazap);
@@ -36,21 +38,37 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("fuzzig", fuzzig);
     exe.root_module.addImport("zeit", zeit);
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
+    const server_exe = b.addExecutable(.{
+        .name = "dotvc-server",
+        .root_source_file = b.path("src/server/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    server_exe.root_module.addImport("httpz", httpz);
+    server_exe.root_module.addImport("myzql", myzql);
+
+    const client_step = b.step("client", "Build client");
+    const server_step = b.step("server", "Build server");
+
+    const install_client = b.addInstallArtifact(exe, .{});
+    const install_server = b.addInstallArtifact(server_exe, .{});
+
+    client_step.dependOn(&install_client.step);
+    server_step.dependOn(&install_server.step);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
     // such a dependency.
     const run_cmd = b.addRunArtifact(exe);
+    const run_server_cmd = b.addRunArtifact(server_exe);
 
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
     // This is not necessary, however, if the application depends on other installed
     // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.step.dependOn(client_step);
+    run_server_cmd.step.dependOn(server_step);
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
