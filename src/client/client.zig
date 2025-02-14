@@ -3,9 +3,9 @@ const toml = @import("zig-toml");
 const yazap = @import("yazap");
 const root = @import("../main.zig");
 const ipc = @import("../daemon/ipc.zig");
-const interactive = @import("interactive.zig");
+const search = @import("search.zig");
 
-pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg: ipc.IpcMsg) !root.ArenaOutput(ipc.IpcResponse) {
+pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg: ipc.IpcMsg) !root.ArenaAllocated(ipc.IpcResponse) {
     var arena = std.heap.ArenaAllocator.init(allocator);
     const arena_alloc = arena.allocator();
     var buf = std.ArrayList(u8).init(allocator);
@@ -33,6 +33,8 @@ pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg:
         .value = try std.json.parseFromSliceLeaky(ipc.IpcResponse, arena_alloc, read_buf[0 .. offset - 1], .{}),
     };
 }
+
+/// Run the client
 pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path: []const u8) !void {
     var parser = toml.Parser(root.Config).init(allocator);
     defer parser.deinit();
@@ -46,8 +48,13 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
     const addr = try std.net.Address.initUnix(ipc.SOCKET_PATH);
     try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
 
-    if (matches.subcommandMatches("interactive")) |_| {
-        var state = try interactive.State.init(allocator, socket, config);
+    if (matches.subcommandMatches("search")) |search_matches| {
+        var state = search.State.init(allocator, socket, config, search_matches.getSingleValue("database")) catch |err| {
+            if (err == search.SearchError.InvalidDatabase) {
+                std.log.err("Invalid database name specified.", .{});
+            }
+            return;
+        };
         defer state.deinit();
 
         try state.run();

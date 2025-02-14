@@ -108,7 +108,7 @@ pub const Database = struct {
     }
 
     /// Get all dotfiles from the database in a distilled form (content omitted)
-    pub fn getDotfiles(self: *Database) !root.ArenaOutput([]struct { Dotfile, i64 }) {
+    pub fn getDotfiles(self: *Database) !root.ArenaAllocated([]struct { Dotfile, i64 }) {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         const allocator = arena.allocator();
         var get_dotfiles = try self.db.prepare(
@@ -141,7 +141,7 @@ pub const Database = struct {
     }
 
     /// Get a single dotfile from the database
-    pub fn getDotfile(self: *Database, rowid: i64) !root.ArenaOutput(Dotfile) {
+    pub fn getDotfile(self: *Database, rowid: i64) !root.ArenaAllocated(Dotfile) {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         const allocator = arena.allocator();
         var get_dotfile = try self.db.prepare(

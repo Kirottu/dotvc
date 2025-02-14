@@ -22,7 +22,7 @@ pub const WatchPath = struct {
     ignore: ?[][]const u8,
 };
 
-pub fn ArenaOutput(comptime T: type) type {
+pub fn ArenaAllocated(comptime T: type) type {
     return struct {
         arena: std.heap.ArenaAllocator,
         value: T,
@@ -35,30 +35,33 @@ pub fn ArenaOutput(comptime T: type) type {
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) {
-            std.log.err("memory leak", .{});
-        }
-    }
     const allocator = gpa.allocator();
 
-    var app = yazap.App.init(allocator, "dotvc", "Version control for your dotfiles");
+    var app = yazap.App.init(allocator, "DotVC", "Version control for your dotfiles");
     defer app.deinit();
 
     var cli = app.rootCommand();
     try cli.addArg(yazap.Arg.singleValueOption("config", 'c', "Override config file location"));
+    try cli.addArg(yazap.Arg.booleanOption("log-leaks", null, "Debugging option, log memory leaks on exit"));
 
-    const interactive = app.createCommand("interactive", "Interactively search for dotfiles");
+    var search = app.createCommand("search", "Interactively search for dotfiles");
+    try search.addArg(yazap.Arg.singleValueOption("database", 'd', "Specify which database to use, hostnames are used as database names"));
+
     const kill = app.createCommand("kill", "Gracefully shutdown the daemon");
+    var add = app.createCommand("add", "Add a path to the configuration");
+    try add.addArgs(&.{
+        yazap.Arg.positional("path", "The target path", null),
+        yazap.Arg.multiValuesOption("tags", 't', "Tags for all dotfiles in the target path", 10),
+        yazap.Arg.multiValuesOption("ignore", 'i', "Ignore patterns for path contents if target path is a directory", 10),
+    });
 
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommands(&[_]yazap.Command{ interactive, kill, daemon_cli });
+    try cli.addSubcommands(&[_]yazap.Command{ search, kill, daemon_cli });
 
     const matches = try app.parseProcess();
-
+    const log_leaks = matches.containsArg("log-leaks");
     const config_path = if (matches.getSingleValue("config")) |path| path else dir: {
         const config_dir_postfix = "/dotvc/config.toml";
 
@@ -88,5 +91,10 @@ pub fn main() !u8 {
     } else {
         try client.run(allocator, matches, config_path);
     }
+
+    if (log_leaks) {
+        _ = gpa.detectLeaks();
+    }
+
     return 0;
 }

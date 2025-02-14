@@ -8,21 +8,35 @@ pub const Msg = struct {
     ipc_msg: IpcMsg,
 };
 
-pub const IpcNone = struct {};
-
 /// The messages that are actually passed through the IPC
 pub const IpcMsg = union(enum) {
-    shutdown: IpcNone,
-    reload_config: IpcNone,
-    index_all: IpcNone,
-    get_all_dotfiles: IpcNone,
-    get_dotfile: i64,
+    shutdown: struct {},
+    reload_config: struct {},
+    index_all: struct {},
+    get_all_dotfiles: ?[]const u8,
+    get_dotfile: IpcGetDotfile,
+};
+
+pub const IpcGetDotfile = struct {
+    rowid: i64,
+    database: ?[]const u8,
 };
 
 pub const IpcResponse = union(enum) {
-    ok: IpcNone,
+    ok: struct {},
+    err: IpcError,
     dotfiles: []const IpcDistilledDotfile,
     dotfile: IpcDotfile,
+
+    pub fn isErr(self: IpcResponse) bool {
+        return switch (self) {
+            inline else => |field| @TypeOf(field) == IpcError,
+        };
+    }
+};
+
+pub const IpcError = enum {
+    invalid_database,
 };
 
 /// Dotfile ready for writing into the filesystem or editing
@@ -122,7 +136,7 @@ pub const Ipc = struct {
         }
     }
 
-    pub fn readMessages(self: *Ipc) !root.ArenaOutput(std.ArrayList(Msg)) {
+    pub fn readMessages(self: *Ipc) !root.ArenaAllocated(std.ArrayList(Msg)) {
         try self.acceptClients();
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         const allocator = arena.allocator();
