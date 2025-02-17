@@ -1,27 +1,43 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const myzql = @import("myzql");
+pub const hiredis = @cImport(@cInclude("hiredis/hiredis.h"));
 
-const argon2 = std.crypto.pwhash.argon2;
+const auth = @import("auth.zig");
 
-const RequestContext = struct {
+pub const RequestContext = struct {
     app: *App,
+};
+
+const AppError = error{
+    RedisError,
 };
 
 const App = struct {
     db_conn: myzql.conn.Conn,
+    /// Redis is used to cache authenticated sessions
+    redis_ctx: *hiredis.redisContext,
+    auth_endpoints: []const []const u8,
 
-    pub fn init(allocator: std.mem.Allocator) !App {
+    pub fn init(allocator: std.mem.Allocator, auth_endpoints: []const []const u8) !App {
         var db_conn = try myzql.conn.Conn.init(allocator, &.{
             .username = "dotvc",
             .password = "dotvc",
             .database = "dotvc",
         });
+        const redis_ctx = hiredis.redisConnect("127.0.0.1", 6379);
+
+        if (redis_ctx != null and redis_ctx.*.err != 0) {
+            std.log.err("Failed to connect to redis: {s}", .{redis_ctx.*.errstr});
+            return AppError.RedisError;
+        }
 
         try db_conn.ping();
 
         return App{
             .db_conn = db_conn,
+            .auth_endpoints = auth_endpoints,
+            .redis_ctx = redis_ctx,
         };
     }
 
@@ -62,7 +78,7 @@ const App = struct {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
-    var app = try App.init(allocator);
+    var app = try App.init(allocator, &.{"/restricted"});
 
     var server = try httpz.Server(*App).init(allocator, .{ .port = 3001 }, &app);
     defer {
@@ -72,7 +88,9 @@ pub fn main() !void {
 
     var router = server.router(.{});
     router.get("/hello/world", hello, .{});
-    router.post("/register", register, .{});
+    router.post("/auth/register", auth.register, .{});
+    router.get("/auth/token", auth.token, .{});
+    router.get("/restricted", restricted, .{});
 
     try server.listen();
 }
@@ -81,29 +99,7 @@ pub fn hello(_: *RequestContext, _: *httpz.Request, res: *httpz.Response) !void 
     try res.chunk("Hello world");
 }
 
-pub fn register(ctx: *RequestContext, req: *httpz.Request, res: *httpz.Response) !void {
-    const query = try req.query();
-    const username = query.get("username") orelse {
-        res.status = 400;
-        return;
-    };
-    const password = query.get("username") orelse {
-        res.status = 400;
-        return;
-    };
-
-    var buf: [256]u8 = undefined;
-
-    const out = try argon2.strHash(password, .{
-        .allocator = res.arena,
-        .params = argon2.Params.owasp_2id,
-    }, &buf);
-
-    const stmt = try (try ctx.app.db_conn.prepare(
-        res.arena,
-        "INSERT INTO users (username, pass_hash) VALUES (?, ?)",
-    )).expect(.stmt);
-
-    const db_res = try ctx.app.db_conn.execute(&stmt, .{ username, out });
-    _ = try db_res.expect(.ok);
+/// Test endpoint for authentication
+pub fn restricted(_: *RequestContext, _: *httpz.Request, res: *httpz.Response) !void {
+    res.body = "You've entered the cum zone";
 }

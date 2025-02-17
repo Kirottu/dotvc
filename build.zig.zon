@@ -28,8 +28,8 @@
             .hash = "1220bbf36166a56f03ca55c2f455f70cdb3dd5f8dca1f7c78e57d9402add9635b2b9",
         },
         .yazap = .{
-            .url = "git+https://github.com/prajwalch/yazap#c2e3122d5dd6192513ba590f229dbc535110efb8",
-            .hash = "122054439ec36ac10987c87ae69f3b041b40b2e451af3fe3ef1fc578b3bad756a800",
+            .url = "git+https://github.com/prajwalch/yazap#306d8bf56bed528654977217827fb6ad03621538",
+            .hash = "122019ea78cf9b4c722f2ca532e0104320dac5dbb8eac1bb8c69e5e827aeb411b7ef",
         },
         .@"zig-toml" = .{
             .url = "git+https://github.com/sam701/zig-toml#92b50b47233ab8b3cac127cbd2a21e68b5ffb95a",
