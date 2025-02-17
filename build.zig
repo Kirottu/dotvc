@@ -45,10 +45,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    server_exe.linkLibC();
-    server_exe.root_module.linkSystemLibrary("hiredis", .{});
     server_exe.root_module.addImport("httpz", httpz);
     server_exe.root_module.addImport("myzql", myzql);
+    server_exe.root_module.addImport("yazap", yazap);
 
     const client_step = b.step("client", "Build client");
     const server_step = b.step("server", "Build server");

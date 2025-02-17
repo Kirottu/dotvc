@@ -9,13 +9,11 @@ const hiredis = root.hiredis;
 const ResultSet = myzql.result.ResultSet;
 const TextResultRow = myzql.result.TextResultRow;
 
-const REDIS_TOKEN_PREFIX = "dotvc:token";
 const TOKEN_LEN = 32;
 const TOKEN_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-const TOKEN_AGE = 604800; // A week, FIXME: A proper time should be determined
 
-/// Generate a temporary authentication token by authenticating with HTTP Basic authorization
-pub fn token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Response) !void {
+/// Generate a token based on credentials that will be used for any further authenticated request
+pub fn create_token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Response) !void {
     const header = req.headers.get("authorization") orelse {
         res.status = 401;
         res.body = "Unauthorized: Missing `Authorization` header";
@@ -57,21 +55,24 @@ pub fn token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Respons
         return;
     };
 
-    const stmt = try (try ctx.app.db_conn.prepare(res.arena, "SELECT pass_hash FROM users WHERE username = ?")).expect(.stmt);
+    const rec = blk: {
+        const stmt = try (try ctx.app.db_conn.prepare(res.arena, "SELECT pass_hash FROM users WHERE username = ?")).expect(.stmt);
 
-    const db_res = try ctx.app.db_conn.executeRows(&stmt, .{username});
-    const rows = try db_res.expect(.rows);
-    const row = try rows.first() orelse {
-        res.status = 401;
-        res.body = "Unauthorized: Invalid login details";
-        return;
+        const db_res = try ctx.app.db_conn.executeRows(&stmt, .{username});
+        const rows = try db_res.expect(.rows);
+        const row = try rows.first() orelse {
+            res.status = 401;
+            res.body = "Unauthorized: Invalid login details";
+            return;
+        };
+
+        const Record = struct {
+            pass_hash: []const u8,
+        };
+
+        const rec = try row.structCreate(Record, res.arena);
+        break :blk rec;
     };
-
-    const Record = struct {
-        pass_hash: []const u8,
-    };
-
-    const rec = try row.structCreate(Record, res.arena);
 
     argon2.strVerify(rec.pass_hash, password, .{ .allocator = res.arena }) catch {
         res.status = 401;
@@ -93,22 +94,9 @@ pub fn token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Respons
         new_token[i] = TOKEN_CHARS[index];
     }
 
-    const reply = hiredis.redisCommand(ctx.app.redis_ctx, try std.fmt.allocPrintZ(
-        res.arena,
-        "SET {s}{s} {s}",
-        .{
-            REDIS_TOKEN_PREFIX,
-            new_token,
-            username,
-        },
-    ));
-
-    if (reply == null) {
-        std.log.err("Redis error: {s}", .{ctx.app.redis_ctx.errstr});
-        res.status = 500;
-        res.body = "Internal redis error occurred";
-        return;
-    }
+    const stmt = try (try ctx.app.db_conn.prepare(res.arena, "INSERT INTO auth_tokens VALUES (?, ?, NOW())")).expect(.stmt);
+    const db_res = try ctx.app.db_conn.execute(&stmt, .{ new_token, username });
+    _ = try db_res.expect(.ok);
 
     res.body = new_token;
 }
@@ -140,4 +128,34 @@ pub fn register(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Resp
 
     const db_res = try ctx.app.db_conn.execute(&stmt, .{ username, out });
     _ = try db_res.expect(.ok);
+}
+
+/// Authenticate user based on token
+///
+/// Must be provided an arena allocator, otherwise will leak memory
+pub fn authenticate(allocator: std.mem.Allocator, ctx: *root.RequestContext, token: []const u8) !?[]const u8 {
+    const rec = blk: {
+        const stmt = try (try ctx.app.db_conn.prepare(allocator, "SELECT username FROM auth_tokens WHERE token = ?"))
+            .expect(.stmt);
+
+        const rows = try ctx.app.db_conn.executeRows(&stmt, .{token});
+        const row = try rows.rows.first() orelse {
+            return null;
+        };
+
+        const Record = struct {
+            username: []const u8,
+        };
+
+        const rec = try row.structCreate(Record, allocator);
+        break :blk rec;
+    };
+
+    const stmt = try (try ctx.app.db_conn.prepare(allocator, "UPDATE auth_tokens SET last_used = NOW() WHERE token = ?"))
+        .expect(.stmt);
+
+    const db_res = try ctx.app.db_conn.execute(&stmt, .{token});
+    _ = try db_res.expect(.ok);
+
+    return rec.username;
 }

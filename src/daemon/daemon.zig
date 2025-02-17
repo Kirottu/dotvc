@@ -68,6 +68,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
     defer watcher_map.deinit();
 
     // Map for auxiliary databases, as in readonly databases that are not created by the current host
+    // FIXME: This needs to be deleted
     var aux_db_map = std.StringHashMap(database.Database).init(allocator);
     defer {
         var it = aux_db_map.valueIterator();
@@ -112,13 +113,13 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             switch (msg.ipc_msg) {
                 .shutdown => {
                     std.log.info("Shutting down daemon...", .{});
-                    try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
+                    try msg.client.reply(.{ .ok = .{} });
                     try ipc_manager.disconnectClient(msg.client);
                     return;
                 },
                 .reload_config => {
                     std.log.info("Reloading config...", .{});
-                    try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
+                    try msg.client.reply(.{ .ok = .{} });
                     result.deinit();
                     result = try parser.parseFile(config_path);
                     config = result.value;
@@ -138,15 +139,18 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                 },
                 .index_all => unreachable,
                 .get_all_dotfiles => |db_name| blk: {
-                    var db = if (db_name) |_db_name| db_sel: {
-                        if (aux_db_map.getPtr(_db_name)) |aux_db| {
-                            break :db_sel aux_db;
-                        } else {
-                            try msg.client.reply(ipc.IpcResponse{ .err = .invalid_database });
+                    var db, const aux = if (db_name) |_db_name| db_sel: {
+                        const aux_db_path = try std.mem.concat(allocator, u8, &.{ data_dir, _db_name });
+                        defer allocator.free(aux_db_path);
+
+                        var db = database.Database.init(allocator, aux_db_path, true) catch {
+                            try msg.client.reply(.{ .err = .invalid_database });
                             break :blk;
-                        }
+                        };
+
+                        break :db_sel .{ &db, true };
                     } else db_sel: {
-                        break :db_sel &main_db;
+                        break :db_sel .{ &main_db, false };
                     };
                     const db_dotfiles = try db.getDotfiles();
                     const ipc_dotfile_buf = try allocator.alloc(ipc.IpcDistilledDotfile, db_dotfiles.value.len);
@@ -166,6 +170,11 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                     }
 
                     try msg.client.reply(ipc.IpcResponse{ .dotfiles = ipc_dotfile_buf });
+
+                    // Cleanup database if it's an aux database
+                    if (aux) {
+                        db.deinit();
+                    }
                 },
                 .get_dotfile => |req| blk: {
                     var db = if (req.database) |db_name| db_sel: {
