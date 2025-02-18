@@ -13,7 +13,7 @@ const TOKEN_LEN = 32;
 const TOKEN_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 /// Generate a token based on credentials that will be used for any further authenticated request
-pub fn create_token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Response) !void {
+pub fn createToken(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const header = req.headers.get("authorization") orelse {
         res.status = 401;
         res.body = "Unauthorized: Missing `Authorization` header";
@@ -56,9 +56,9 @@ pub fn create_token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.
     };
 
     const rec = blk: {
-        const stmt = try (try ctx.app.db_conn.prepare(res.arena, "SELECT pass_hash FROM users WHERE username = ?")).expect(.stmt);
+        const stmt = try (try app.db_conn.prepare(res.arena, "SELECT pass_hash FROM users WHERE username = ?")).expect(.stmt);
 
-        const db_res = try ctx.app.db_conn.executeRows(&stmt, .{username});
+        const db_res = try app.db_conn.executeRows(&stmt, .{username});
         const rows = try db_res.expect(.rows);
         const row = try rows.first() orelse {
             res.status = 401;
@@ -94,8 +94,8 @@ pub fn create_token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.
         new_token[i] = TOKEN_CHARS[index];
     }
 
-    const stmt = try (try ctx.app.db_conn.prepare(res.arena, "INSERT INTO auth_tokens VALUES (?, ?, NOW())")).expect(.stmt);
-    const db_res = try ctx.app.db_conn.execute(&stmt, .{ new_token, username });
+    const stmt = try (try app.db_conn.prepare(res.arena, "INSERT INTO auth_tokens VALUES (?, ?, NOW())")).expect(.stmt);
+    const db_res = try app.db_conn.execute(&stmt, .{ new_token, username });
     _ = try db_res.expect(.ok);
 
     res.body = new_token;
@@ -103,7 +103,7 @@ pub fn create_token(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.
 
 /// Debug endpoint for creating users
 /// FIXME: Needs to be deleted in favor of some other user creation method
-pub fn register(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Response) !void {
+pub fn register(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const query = try req.query();
     const username = query.get("username") orelse {
         res.status = 400;
@@ -121,25 +121,43 @@ pub fn register(ctx: *root.RequestContext, req: *httpz.Request, res: *httpz.Resp
         .params = argon2.Params.owasp_2id,
     }, &buf);
 
-    const stmt = try (try ctx.app.db_conn.prepare(
+    const stmt = try (try app.db_conn.prepare(
         res.arena,
         "INSERT INTO users (username, pass_hash) VALUES (?, ?)",
     )).expect(.stmt);
 
-    const db_res = try ctx.app.db_conn.execute(&stmt, .{ username, out });
+    const db_res = try app.db_conn.execute(&stmt, .{ username, out });
     _ = try db_res.expect(.ok);
 }
+
+const AuthenticationMethod = enum {
+    header,
+    cookie,
+};
 
 /// Authenticate user based on token
 ///
 /// Must be provided an arena allocator, otherwise will leak memory
-pub fn authenticate(allocator: std.mem.Allocator, ctx: *root.RequestContext, token: []const u8) !?[]const u8 {
-    const rec = blk: {
-        const stmt = try (try ctx.app.db_conn.prepare(allocator, "SELECT username FROM auth_tokens WHERE token = ?"))
-            .expect(.stmt);
+pub fn authenticate(app: *root.App, req: *httpz.Request, res: *httpz.Response, method: AuthenticationMethod) !?[]const u8 {
+    const token = switch (method) {
+        .header => req.header("token"),
+        .cookie => unreachable,
+    } orelse {
+        res.status = 401;
+        res.body = "No token provided";
+        return null;
+    };
 
-        const rows = try ctx.app.db_conn.executeRows(&stmt, .{token});
+    const rec = blk: {
+        const stmt = try (try app.db_conn.prepare(
+            res.arena,
+            "SELECT username FROM auth_tokens WHERE token = ?",
+        )).expect(.stmt);
+
+        const rows = try app.db_conn.executeRows(&stmt, .{token});
         const row = try rows.rows.first() orelse {
+            res.status = 401;
+            res.body = "Invalid token";
             return null;
         };
 
@@ -147,14 +165,16 @@ pub fn authenticate(allocator: std.mem.Allocator, ctx: *root.RequestContext, tok
             username: []const u8,
         };
 
-        const rec = try row.structCreate(Record, allocator);
+        const rec = try row.structCreate(Record, res.arena);
         break :blk rec;
     };
 
-    const stmt = try (try ctx.app.db_conn.prepare(allocator, "UPDATE auth_tokens SET last_used = NOW() WHERE token = ?"))
-        .expect(.stmt);
+    const stmt = try (try app.db_conn.prepare(
+        res.arena,
+        "UPDATE auth_tokens SET last_used = NOW() WHERE token = ?",
+    )).expect(.stmt);
 
-    const db_res = try ctx.app.db_conn.execute(&stmt, .{token});
+    const db_res = try app.db_conn.execute(&stmt, .{token});
     _ = try db_res.expect(.ok);
 
     return rec.username;

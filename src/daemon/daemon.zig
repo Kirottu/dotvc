@@ -5,7 +5,11 @@ const toml = @import("zig-toml");
 const ipc = @import("ipc.zig");
 const inotify = @import("inotify.zig");
 const database = @import("database.zig");
+const sync = @import("sync.zig");
 const root = @import("../main.zig");
+
+pub const DATABASE_FILE = "database";
+pub const DB_EXTENSION = ".sqlite3";
 
 pub const DaemonError = error{
     InvalidDataDir,
@@ -50,49 +54,19 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
         std.log.err("Failed to create dotvc data directory {s}: {}", .{ data_dir, err });
     };
 
-    var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
-    const hostname = try std.posix.gethostname(&hostname_buf);
-
-    const db_path = try std.mem.concat(allocator, u8, &.{ data_dir, hostname, ".db" });
+    const db_path = try std.mem.concat(allocator, u8, &.{ data_dir, DATABASE_FILE, DB_EXTENSION });
     defer allocator.free(db_path);
 
     var main_db = try database.Database.init(allocator, db_path, false);
     var ipc_manager = try ipc.Ipc.init(allocator);
     var watcher = try inotify.Inotify.init(allocator);
-    // Map to assiciate the watcher ID with the config entry
+    var sync_manager = try sync.SyncManager.init(allocator, data_dir, config.sync);
     var watcher_map = std.AutoHashMap(u64, *const root.WatchPath).init(allocator);
 
     defer main_db.deinit();
     defer ipc_manager.deinit();
     defer watcher.deinit();
     defer watcher_map.deinit();
-
-    // Map for auxiliary databases, as in readonly databases that are not created by the current host
-    // FIXME: This needs to be deleted
-    var aux_db_map = std.StringHashMap(database.Database).init(allocator);
-    defer {
-        var it = aux_db_map.valueIterator();
-        while (it.next()) |aux_db| {
-            aux_db.deinit();
-        }
-        aux_db_map.deinit();
-    }
-
-    const dir = try std.fs.cwd().openDir(data_dir, .{ .iterate = true });
-    var dir_it = dir.iterateAssumeFirstIteration();
-    while (try dir_it.next()) |entry| {
-        var split_it = std.mem.splitScalar(u8, entry.name, ':');
-        if (split_it.next()) |name| {
-            if (!std.mem.eql(u8, hostname, name)) {
-                const aux_db_path = try std.mem.concat(allocator, u8, &.{ data_dir, entry.name });
-                defer allocator.free(aux_db_path);
-
-                const db = try database.Database.init(allocator, aux_db_path, true);
-
-                try aux_db_map.put(name, db);
-            }
-        }
-    }
 
     for (config.watch_paths) |*watch_path| {
         std.log.info("Adding watcher for: {s}", .{watch_path.path});
@@ -104,12 +78,19 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
         try watcher_map.put(id, watch_path);
     }
 
+    // Arena for more eficient memory allocation during loops & not needing
+    // to keep track of memory allocations
+    var loop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer loop_arena.deinit();
+
     // Main daemon event loop
     while (true) {
-        const messages = try ipc_manager.readMessages();
-        defer messages.deinit();
+        _ = loop_arena.reset(.retain_capacity);
+        const loop_alloc = loop_arena.allocator();
 
-        for (messages.value.items) |msg| {
+        // Read & handle IPC messages
+        const messages = try ipc_manager.readMessages(loop_alloc);
+        for (messages.items) |msg| {
             switch (msg.ipc_msg) {
                 .shutdown => {
                     std.log.info("Shutting down daemon...", .{});
@@ -140,10 +121,9 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                 .index_all => unreachable,
                 .get_all_dotfiles => |db_name| blk: {
                     var db, const aux = if (db_name) |_db_name| db_sel: {
-                        const aux_db_path = try std.mem.concat(allocator, u8, &.{ data_dir, _db_name });
-                        defer allocator.free(aux_db_path);
+                        const aux_db_path = try std.mem.concat(loop_alloc, u8, &.{ data_dir, "/sync_databases/", _db_name, DB_EXTENSION });
 
-                        var db = database.Database.init(allocator, aux_db_path, true) catch {
+                        var db = database.Database.init(loop_alloc, aux_db_path, true) catch {
                             try msg.client.reply(.{ .err = .invalid_database });
                             break :blk;
                         };
@@ -152,13 +132,10 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                     } else db_sel: {
                         break :db_sel .{ &main_db, false };
                     };
-                    const db_dotfiles = try db.getDotfiles();
-                    const ipc_dotfile_buf = try allocator.alloc(ipc.IpcDistilledDotfile, db_dotfiles.value.len);
+                    const db_dotfiles = try db.getDotfiles(loop_alloc);
+                    const ipc_dotfile_buf = try loop_alloc.alloc(ipc.IpcDistilledDotfile, db_dotfiles.len);
 
-                    defer db_dotfiles.deinit();
-                    defer allocator.free(ipc_dotfile_buf);
-
-                    for (0.., db_dotfiles.value) |i, tuple| {
+                    for (0.., db_dotfiles) |i, tuple| {
                         const dotfile, const id = tuple;
 
                         ipc_dotfile_buf[i] = ipc.IpcDistilledDotfile{
@@ -177,30 +154,33 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                     }
                 },
                 .get_dotfile => |req| blk: {
-                    var db = if (req.database) |db_name| db_sel: {
-                        if (aux_db_map.getPtr(db_name)) |aux_db| {
-                            break :db_sel aux_db;
-                        } else {
-                            try msg.client.reply(ipc.IpcResponse{ .err = .invalid_database });
+                    var db, const aux = if (req.database) |db_name| db_sel: {
+                        const aux_db_path = try std.mem.concat(loop_alloc, u8, &.{ data_dir, "/sync_databases/", db_name, DB_EXTENSION });
+
+                        var db = database.Database.init(allocator, aux_db_path, true) catch {
+                            try msg.client.reply(.{ .err = .invalid_database });
                             break :blk;
-                        }
+                        };
+                        break :db_sel .{ &db, true };
                     } else db_sel: {
-                        break :db_sel &main_db;
+                        break :db_sel .{ &main_db, false };
                     };
 
-                    const dotfile = try db.getDotfile(req.rowid);
-                    defer dotfile.deinit();
+                    const dotfile = try db.getDotfile(loop_alloc, req.rowid);
 
                     try msg.client.reply(ipc.IpcResponse{
-                        .dotfile = ipc.IpcDotfile{ .path = dotfile.value.path, .content = dotfile.value.content },
+                        .dotfile = ipc.IpcDotfile{ .path = dotfile.path, .content = dotfile.content },
                     });
+
+                    if (aux) {
+                        db.deinit();
+                    }
                 },
             }
         }
 
-        const events = try watcher.readEvents();
-        defer events.deinit();
-
+        // Read & handle Inotify events
+        const events = try watcher.readEvents(loop_alloc);
         for (events.items) |event| {
             std.log.info("Ancestor: {s}, name: {?s}", .{ event.ancestor, event.name });
             try event.printMask();
@@ -229,11 +209,10 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             }
 
             const path = try std.mem.concat(
-                allocator,
+                loop_alloc,
                 u8,
                 &.{ event.ancestor, event.name },
             );
-            defer allocator.free(path);
 
             std.log.info("Adding revision for {s} to database", .{path});
 
@@ -243,21 +222,19 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
             const size = (try file.stat()).size;
             const date = std.time.timestamp();
 
-            const buf = try allocator.alloc(u8, size);
-            defer allocator.free(buf);
+            const buf = try loop_alloc.alloc(u8, size);
 
-            const read = try file.readAll(buf);
-            if (read != size) {
-                std.log.err("Read file size does not match expected size, not adding to database (expected: {}, read: {})", .{ size, read });
-            } else {
-                try main_db.addDotfile(database.Dotfile{
-                    .path = path,
-                    .content = buf,
-                    .tags = watch_path.tags,
-                    .date = date,
-                });
-            }
+            _ = try file.readAll(buf);
+
+            try main_db.addDotfile(database.Dotfile{
+                .path = path,
+                .content = buf,
+                .tags = watch_path.tags,
+                .date = date,
+            });
         }
+
+        try sync_manager.sync(loop_alloc);
 
         std.time.sleep(std.time.ns_per_ms * 10);
     }

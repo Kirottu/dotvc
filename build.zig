@@ -82,7 +82,7 @@ pub fn build(b: *std.Build) void {
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`
     // This will evaluate the `run` step rather than the default, which is "install".
-    const run_client_step = b.step("run-client", "Run the client");
+    const run_client_step = b.step("run", "Run the client");
     const run_server_step = b.step("run-server", "Run the server");
     run_client_step.dependOn(&run_client.step);
     run_server_step.dependOn(&run_server.step);

@@ -5,20 +5,14 @@ const yazap = @import("yazap");
 
 const auth = @import("auth.zig");
 const cron = @import("cron.zig");
+const databases = @import("databases.zig");
 
-pub const RequestContext = struct {
-    app: *App,
-};
-
-const App = struct {
+pub const App = struct {
     db_conn: myzql.conn.Conn,
-    /// Redis is used to cache authenticated sessions
-    auth_endpoints: []const []const u8,
 
-    pub fn init(_: std.mem.Allocator, db_conn: myzql.conn.Conn, auth_endpoints: []const []const u8) !App {
+    pub fn init(_: std.mem.Allocator, db_conn: myzql.conn.Conn) !App {
         return App{
             .db_conn = db_conn,
-            .auth_endpoints = auth_endpoints,
         };
     }
 
@@ -27,16 +21,15 @@ const App = struct {
     }
 
     fn logRequest(_: *App, req: *httpz.Request, res: *httpz.Response) void {
-        std.log.info("{} - {s} {s}", .{
+        std.log.info("{} - {} {s}", .{
             res.status,
-            if (req.method_string.len == 0) "GET" else req.method_string,
+            req.method,
             req.url.path,
         });
     }
 
-    pub fn dispatch(self: *App, action: httpz.Action(*RequestContext), req: *httpz.Request, res: *httpz.Response) !void {
-        var ctx = RequestContext{ .app = self };
-        try action(&ctx, req, res);
+    pub fn dispatch(self: *App, action: httpz.Action(*App), req: *httpz.Request, res: *httpz.Response) !void {
+        try action(self, req, res);
 
         self.logRequest(req, res);
     }
@@ -78,7 +71,7 @@ pub fn main() !void {
     if (matches.containsArg("cron")) {
         try cron.cron(allocator, &db_conn);
     } else {
-        var app = try App.init(allocator, db_conn, &.{"/restricted"});
+        var app = try App.init(allocator, db_conn);
 
         var server = try httpz.Server(*App).init(allocator, .{ .port = 3001 }, &app);
         defer {
@@ -87,31 +80,13 @@ pub fn main() !void {
         }
 
         var router = server.router(.{});
-        router.get("/hello/world", hello, .{});
         router.post("/auth/register", auth.register, .{});
-        router.get("/auth/token", auth.create_token, .{});
-        router.get("/restricted", restricted, .{});
+        router.get("/auth/token", auth.createToken, .{});
+        router.get("/databases/manifest", databases.manifest, .{});
+        router.get("/databases/download/:hostname", databases.download, .{});
+        router.post("/databases/upload/:hostname", databases.upload, .{});
+        router.delete("/databases/delete/:hostname", databases.delete, .{});
 
         try server.listen();
     }
-}
-
-pub fn hello(_: *RequestContext, _: *httpz.Request, res: *httpz.Response) !void {
-    try res.chunk("Hello world");
-}
-
-/// Test endpoint for authentication
-pub fn restricted(ctx: *RequestContext, req: *httpz.Request, res: *httpz.Response) !void {
-    const token = req.header("token") orelse {
-        res.status = 401;
-        res.body = "Missing `Token` header";
-        return;
-    };
-    const username = try auth.authenticate(res.arena, ctx, token) orelse {
-        res.status = 401;
-        res.body = "Invalid token";
-        return;
-    };
-
-    res.body = username;
 }

@@ -136,7 +136,7 @@ pub const Inotify = struct {
         self.watchers.clearRetainingCapacity();
     }
 
-    pub fn readEvents(self: *Inotify) !std.ArrayList(Event) {
+    pub fn readEvents(self: *Inotify, loop_alloc: std.mem.Allocator) !std.ArrayList(Event) {
         // Check any file in the retry loop
         for (self.watchers.items) |*watcher| {
             if (watcher.fd == null) {
@@ -154,7 +154,7 @@ pub const Inotify = struct {
             }
         }
 
-        var events = std.ArrayList(Event).init(self.allocator);
+        var events = std.ArrayList(Event).init(loop_alloc);
         if (std.posix.read(self.fd, self.buf)) |read| {
             std.log.info("Read {} bytes from inotify", .{read});
 

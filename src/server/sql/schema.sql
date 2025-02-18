@@ -12,9 +12,10 @@ CREATE TABLE auth_tokens(
     FOREIGN KEY(username) REFERENCES users(username)
 );
 
-CREATE TABLE databases(
+CREATE TABLE db_manifests(
     username VARCHAR(20) NOT NULL,
     hostname VARCHAR(255) NOT NULL,
+    modified TIMESTAMP NOT NULL,
     PRIMARY KEY(username, hostname),
     FOREIGN KEY(username) REFERENCES users(username)
 );

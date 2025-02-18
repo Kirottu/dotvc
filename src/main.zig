@@ -14,12 +14,18 @@ pub const Config = struct {
     editor: []const u8,
     global_ignore: [][]const u8,
     watch_paths: []const WatchPath,
+    sync: ?SyncConfig,
 };
 
 pub const WatchPath = struct {
     path: []const u8,
     tags: [][]const u8,
     ignore: ?[][]const u8,
+};
+
+pub const SyncConfig = struct {
+    host: []const u8,
+    sync_interval: ?u64,
 };
 
 pub fn ArenaAllocated(comptime T: type) type {

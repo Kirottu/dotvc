@@ -136,13 +136,10 @@ pub const Ipc = struct {
         }
     }
 
-    pub fn readMessages(self: *Ipc) !root.ArenaAllocated(std.ArrayList(Msg)) {
+    pub fn readMessages(self: *Ipc, loop_alloc: std.mem.Allocator) !std.ArrayList(Msg) {
         try self.acceptClients();
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        const allocator = arena.allocator();
-
-        var messages = std.ArrayList(Msg).init(allocator);
-        var pending_disconnection = std.ArrayList(*Client).init(self.allocator);
+        var messages = std.ArrayList(Msg).init(loop_alloc);
+        var pending_disconnection = std.ArrayList(*Client).init(loop_alloc);
         defer pending_disconnection.deinit();
 
         for (self.clients.items) |*client| {
@@ -163,7 +160,8 @@ pub const Ipc = struct {
 
             client.offset += read;
             if (client.offset != 0 and client.buf[client.offset - 1] == '\n') {
-                const ipc_msg = try std.json.parseFromSliceLeaky(IpcMsg, allocator, client.buf[0 .. client.offset - 1], .{});
+                // Leaky is fine as loop_lloc is cleaned on every main loop cycle
+                const ipc_msg = try std.json.parseFromSliceLeaky(IpcMsg, loop_alloc, client.buf[0 .. client.offset - 1], .{});
                 const msg = Msg{
                     .client = client,
                     .ipc_msg = ipc_msg,
@@ -177,10 +175,7 @@ pub const Ipc = struct {
             try self.disconnectClient(client);
         }
 
-        return .{
-            .arena = arena,
-            .value = messages,
-        };
+        return messages;
     }
 
     pub fn disconnectClient(self: *Ipc, client: *Client) !void {

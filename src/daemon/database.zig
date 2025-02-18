@@ -108,9 +108,7 @@ pub const Database = struct {
     }
 
     /// Get all dotfiles from the database in a distilled form (content omitted)
-    pub fn getDotfiles(self: *Database) !root.ArenaAllocated([]struct { Dotfile, i64 }) {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        const allocator = arena.allocator();
+    pub fn getDotfiles(self: *Database, loop_alloc: std.mem.Allocator) ![]struct { Dotfile, i64 } {
         var get_dotfiles = try self.db.prepare(
             \\SELECT * FROM dotfiles;
         );
@@ -119,13 +117,13 @@ pub const Database = struct {
         );
         defer get_dotfiles.deinit();
         defer get_tags.deinit();
-        const dotfiles = try get_dotfiles.all(DbDotfile, allocator, .{}, .{});
+        const dotfiles = try get_dotfiles.all(DbDotfile, loop_alloc, .{}, .{});
 
-        const dotfile_buf = try allocator.alloc(struct { Dotfile, i64 }, dotfiles.len);
+        const dotfile_buf = try loop_alloc.alloc(struct { Dotfile, i64 }, dotfiles.len);
 
         for (0.., dotfiles) |i, db_dotfile| {
             get_tags.reset();
-            const tags = try get_tags.all([]const u8, allocator, .{}, .{ .dotfile_id = db_dotfile.id });
+            const tags = try get_tags.all([]const u8, loop_alloc, .{}, .{ .dotfile_id = db_dotfile.id });
             dotfile_buf[i] = .{
                 Dotfile{
                     .path = db_dotfile.path,
@@ -137,13 +135,11 @@ pub const Database = struct {
             };
         }
 
-        return .{ .arena = arena, .value = dotfile_buf };
+        return dotfile_buf;
     }
 
     /// Get a single dotfile from the database
-    pub fn getDotfile(self: *Database, rowid: i64) !root.ArenaAllocated(Dotfile) {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        const allocator = arena.allocator();
+    pub fn getDotfile(self: *Database, loop_alloc: std.mem.Allocator, rowid: i64) !Dotfile {
         var get_dotfile = try self.db.prepare(
             \\SELECT * FROM dotfiles WHERE id = ?;
         );
@@ -153,17 +149,14 @@ pub const Database = struct {
         defer get_dotfile.deinit();
         defer get_tags.deinit();
 
-        const dotfile = (try get_dotfile.oneAlloc(DbDotfile, allocator, .{}, .{ .id = rowid })) orelse unreachable;
-        const tags = try get_tags.all([]const u8, allocator, .{}, .{ .dotfile_id = rowid });
+        const dotfile = (try get_dotfile.oneAlloc(DbDotfile, loop_alloc, .{}, .{ .id = rowid })) orelse unreachable;
+        const tags = try get_tags.all([]const u8, loop_alloc, .{}, .{ .dotfile_id = rowid });
 
-        return .{
-            .arena = arena,
-            .value = Dotfile{
-                .path = dotfile.path,
-                .content = dotfile.content,
-                .tags = tags,
-                .date = dotfile.date,
-            },
+        return Dotfile{
+            .path = dotfile.path,
+            .content = dotfile.content,
+            .tags = tags,
+            .date = dotfile.date,
         };
     }
 
