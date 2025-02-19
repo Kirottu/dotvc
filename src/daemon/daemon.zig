@@ -60,7 +60,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
     var main_db = try database.Database.init(allocator, db_path, false);
     var ipc_manager = try ipc.Ipc.init(allocator);
     var watcher = try inotify.Inotify.init(allocator);
-    var sync_manager = try sync.SyncManager.init(allocator, data_dir, config.sync);
+    var sync_manager = try sync.SyncManager.init(allocator, data_dir, &config);
     var watcher_map = std.AutoHashMap(u64, *const root.WatchPath).init(allocator);
 
     defer main_db.deinit();
@@ -104,6 +104,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                     result.deinit();
                     result = try parser.parseFile(config_path);
                     config = result.value;
+                    sync_manager.config = &config;
 
                     watcher_map.clearRetainingCapacity();
 
@@ -175,6 +176,10 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                     if (aux) {
                         db.deinit();
                     }
+                },
+                .authenticate => |token| {
+                    try sync_manager.authenticate(token);
+                    try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
                 },
             }
         }

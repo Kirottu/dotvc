@@ -49,7 +49,16 @@ pub fn download(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
 
     const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", hostname, DB_EXTENSION });
 
-    const file = try std.fs.cwd().openFile(db_path, .{});
+    const file = std.fs.cwd().openFile(db_path, .{}) catch |err| {
+        if (err == .FileNotFound) {
+            res.status = 410;
+            res.body = "Database does not exist on server";
+        } else {
+            res.status = 500;
+            res.body = "Unknown error opening file";
+        }
+        return;
+    };
 
     const body = try res.arena.alloc(u8, (try file.metadata()).size());
 
@@ -58,6 +67,7 @@ pub fn download(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
     res.content_type = httpz.ContentType.BINARY;
     res.body = body;
 }
+
 pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const username = try auth.authenticate(app, req, res, .header) orelse {
         return;

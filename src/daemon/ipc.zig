@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../main.zig");
+const sync = @import("sync.zig");
 
 pub const SOCKET_PATH = "/tmp/dotvc.sock";
 
@@ -15,6 +16,7 @@ pub const IpcMsg = union(enum) {
     index_all: struct {},
     get_all_dotfiles: ?[]const u8,
     get_dotfile: IpcGetDotfile,
+    authenticate: sync.SyncState,
 };
 
 pub const IpcGetDotfile = struct {
