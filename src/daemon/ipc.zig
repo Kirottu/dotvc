@@ -13,10 +13,15 @@ pub const Msg = struct {
 pub const IpcMsg = union(enum) {
     shutdown: struct {},
     reload_config: struct {},
+
     index_all: struct {},
     get_all_dotfiles: ?[]const u8,
     get_dotfile: IpcGetDotfile,
+
     authenticate: sync.SyncState,
+    purge_sync: struct {},
+    deauthenticate: struct {},
+    get_sync_status: struct {},
 };
 
 pub const IpcGetDotfile = struct {
@@ -29,6 +34,7 @@ pub const IpcResponse = union(enum) {
     err: IpcError,
     dotfiles: []const IpcDistilledDotfile,
     dotfile: IpcDotfile,
+    sync_status: SyncStatus,
 
     pub fn isErr(self: IpcResponse) bool {
         return switch (self) {
@@ -39,6 +45,16 @@ pub const IpcResponse = union(enum) {
 
 pub const IpcError = enum {
     invalid_database,
+};
+
+pub const SyncStatus = union(enum) {
+    not_synced: struct {},
+    synced: struct {
+        last_sync: i64,
+        host: []const u8,
+        username: []const u8,
+        manifests: ?[]sync.Manifest,
+    },
 };
 
 /// Dotfile ready for writing into the filesystem or editing

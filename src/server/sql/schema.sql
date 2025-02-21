@@ -14,7 +14,7 @@ CREATE TABLE auth_tokens(
 
 CREATE TABLE db_manifests(
     username VARCHAR(20) NOT NULL,
-    hostname VARCHAR(255) NOT NULL,
+    hostname VARCHAR(64) NOT NULL,
     modified TIMESTAMP NOT NULL,
     PRIMARY KEY(username, hostname),
     FOREIGN KEY(username) REFERENCES users(username)

@@ -4,6 +4,7 @@ const yazap = @import("yazap");
 const root = @import("../main.zig");
 const ipc = @import("../daemon/ipc.zig");
 const search = @import("search.zig");
+const sync = @import("sync.zig");
 
 pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg: ipc.IpcMsg) !root.ArenaAllocated(ipc.IpcResponse) {
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -61,5 +62,7 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
     } else if (matches.subcommandMatches("kill")) |_| {
         const res = try ipcMessage(allocator, socket, ipc.IpcMsg{ .shutdown = .{} });
         res.deinit();
-    } else if (matches.subcommandMatches("sync")) |sync_cli| {}
+    } else if (matches.subcommandMatches("sync")) |sync_cli| {
+        try sync.syncCli(allocator, socket, sync_cli);
+    }
 }

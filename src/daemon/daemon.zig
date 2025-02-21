@@ -8,7 +8,7 @@ const database = @import("database.zig");
 const sync = @import("sync.zig");
 const root = @import("../main.zig");
 
-pub const DATABASE_FILE = "database";
+pub const DB_FILE = "database";
 pub const DB_EXTENSION = ".sqlite3";
 
 pub const DaemonError = error{
@@ -54,7 +54,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
         std.log.err("Failed to create dotvc data directory {s}: {}", .{ data_dir, err });
     };
 
-    const db_path = try std.mem.concat(allocator, u8, &.{ data_dir, DATABASE_FILE, DB_EXTENSION });
+    const db_path = try std.mem.concat(allocator, u8, &.{ data_dir, DB_FILE, DB_EXTENSION });
     defer allocator.free(db_path);
 
     var main_db = try database.Database.init(allocator, db_path, false);
@@ -89,103 +89,137 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
         const loop_alloc = loop_arena.allocator();
 
         // Read & handle IPC messages
-        const messages = try ipc_manager.readMessages(loop_alloc);
-        for (messages.items) |msg| {
-            switch (msg.ipc_msg) {
-                .shutdown => {
-                    std.log.info("Shutting down daemon...", .{});
-                    try msg.client.reply(.{ .ok = .{} });
-                    try ipc_manager.disconnectClient(msg.client);
-                    return;
-                },
-                .reload_config => {
-                    std.log.info("Reloading config...", .{});
-                    try msg.client.reply(.{ .ok = .{} });
-                    result.deinit();
-                    result = try parser.parseFile(config_path);
-                    config = result.value;
-                    sync_manager.config = &config;
+        if (ipc_manager.readMessages(loop_alloc)) |messages| {
+            for (messages.items) |msg| {
+                switch (msg.ipc_msg) {
+                    .shutdown => {
+                        std.log.info("Shutting down daemon...", .{});
+                        try msg.client.reply(.{ .ok = .{} });
+                        try ipc_manager.disconnectClient(msg.client);
+                        return;
+                    },
+                    .reload_config => {
+                        std.log.info("Reloading config...", .{});
+                        try msg.client.reply(.{ .ok = .{} });
+                        result.deinit();
+                        result = try parser.parseFile(config_path);
+                        config = result.value;
+                        sync_manager.config = &config;
 
-                    watcher_map.clearRetainingCapacity();
+                        watcher_map.clearRetainingCapacity();
 
-                    watcher.purgeWatchers();
-                    for (config.watch_paths) |*watch_path| {
-                        std.log.info("Adding watcher for: {s}", .{watch_path.path});
-                        const id = watcher.addWatcher(watch_path.path) catch |err| {
-                            std.log.err("Error creating watcher for path {s}: {}. Skipping directory", .{ watch_path.path, err });
-                            continue;
+                        watcher.purgeWatchers();
+                        for (config.watch_paths) |*watch_path| {
+                            std.log.info("Adding watcher for: {s}", .{watch_path.path});
+                            const id = watcher.addWatcher(watch_path.path) catch |err| {
+                                std.log.err("Error creating watcher for path {s}: {}. Skipping directory", .{ watch_path.path, err });
+                                continue;
+                            };
+
+                            try watcher_map.put(id, watch_path);
+                        }
+                    },
+                    .index_all => unreachable,
+                    .get_all_dotfiles => |db_name| blk: {
+                        var db, const aux = if (db_name) |_db_name| db_sel: {
+                            const aux_db_path = try std.mem.concat(loop_alloc, u8, &.{ data_dir, "/sync_databases/", _db_name, DB_EXTENSION });
+
+                            var db = database.Database.init(loop_alloc, aux_db_path, true) catch {
+                                try msg.client.reply(.{ .err = .invalid_database });
+                                break :blk;
+                            };
+
+                            break :db_sel .{ &db, true };
+                        } else db_sel: {
+                            break :db_sel .{ &main_db, false };
+                        };
+                        const db_dotfiles = try db.getDotfiles(loop_alloc);
+                        const ipc_dotfile_buf = try loop_alloc.alloc(ipc.IpcDistilledDotfile, db_dotfiles.len);
+
+                        for (0.., db_dotfiles) |i, tuple| {
+                            const dotfile, const id = tuple;
+
+                            ipc_dotfile_buf[i] = ipc.IpcDistilledDotfile{
+                                .rowid = id,
+                                .date = dotfile.date,
+                                .path = dotfile.path,
+                                .tags = dotfile.tags,
+                            };
+                        }
+
+                        try msg.client.reply(ipc.IpcResponse{ .dotfiles = ipc_dotfile_buf });
+
+                        // Cleanup database if it's an aux database
+                        if (aux) {
+                            db.deinit();
+                        }
+                    },
+                    .get_dotfile => |req| blk: {
+                        var db, const aux = if (req.database) |db_name| db_sel: {
+                            const aux_db_path = try std.mem.concat(loop_alloc, u8, &.{ data_dir, "/sync_databases/", db_name, DB_EXTENSION });
+
+                            var db = database.Database.init(allocator, aux_db_path, true) catch {
+                                try msg.client.reply(.{ .err = .invalid_database });
+                                break :blk;
+                            };
+                            break :db_sel .{ &db, true };
+                        } else db_sel: {
+                            break :db_sel .{ &main_db, false };
                         };
 
-                        try watcher_map.put(id, watch_path);
-                    }
-                },
-                .index_all => unreachable,
-                .get_all_dotfiles => |db_name| blk: {
-                    var db, const aux = if (db_name) |_db_name| db_sel: {
-                        const aux_db_path = try std.mem.concat(loop_alloc, u8, &.{ data_dir, "/sync_databases/", _db_name, DB_EXTENSION });
+                        const dotfile = try db.getDotfile(loop_alloc, req.rowid);
 
-                        var db = database.Database.init(loop_alloc, aux_db_path, true) catch {
-                            try msg.client.reply(.{ .err = .invalid_database });
-                            break :blk;
+                        try msg.client.reply(ipc.IpcResponse{
+                            .dotfile = ipc.IpcDotfile{ .path = dotfile.path, .content = dotfile.content },
+                        });
+
+                        if (aux) {
+                            db.deinit();
+                        }
+                    },
+                    .authenticate => |state| {
+                        sync_manager.authenticate(loop_alloc, state) catch |err| {
+                            std.log.err("Failed to authenticate sync: {}", .{err});
                         };
-
-                        break :db_sel .{ &db, true };
-                    } else db_sel: {
-                        break :db_sel .{ &main_db, false };
-                    };
-                    const db_dotfiles = try db.getDotfiles(loop_alloc);
-                    const ipc_dotfile_buf = try loop_alloc.alloc(ipc.IpcDistilledDotfile, db_dotfiles.len);
-
-                    for (0.., db_dotfiles) |i, tuple| {
-                        const dotfile, const id = tuple;
-
-                        ipc_dotfile_buf[i] = ipc.IpcDistilledDotfile{
-                            .rowid = id,
-                            .date = dotfile.date,
-                            .path = dotfile.path,
-                            .tags = dotfile.tags,
+                        try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
+                    },
+                    .deauthenticate => {
+                        sync_manager.deauthenticate(loop_alloc) catch |err| {
+                            std.log.err("Failed to deauthenticate sync: {}", .{err});
                         };
-                    }
-
-                    try msg.client.reply(ipc.IpcResponse{ .dotfiles = ipc_dotfile_buf });
-
-                    // Cleanup database if it's an aux database
-                    if (aux) {
-                        db.deinit();
-                    }
-                },
-                .get_dotfile => |req| blk: {
-                    var db, const aux = if (req.database) |db_name| db_sel: {
-                        const aux_db_path = try std.mem.concat(loop_alloc, u8, &.{ data_dir, "/sync_databases/", db_name, DB_EXTENSION });
-
-                        var db = database.Database.init(allocator, aux_db_path, true) catch {
-                            try msg.client.reply(.{ .err = .invalid_database });
-                            break :blk;
+                        try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
+                    },
+                    .purge_sync => {
+                        sync_manager.purge(loop_alloc) catch |err| {
+                            std.log.err("Failed to purge sync: {}", .{err});
                         };
-                        break :db_sel .{ &db, true };
-                    } else db_sel: {
-                        break :db_sel .{ &main_db, false };
-                    };
-
-                    const dotfile = try db.getDotfile(loop_alloc, req.rowid);
-
-                    try msg.client.reply(ipc.IpcResponse{
-                        .dotfile = ipc.IpcDotfile{ .path = dotfile.path, .content = dotfile.content },
-                    });
-
-                    if (aux) {
-                        db.deinit();
-                    }
-                },
-                .authenticate => |state| {
-                    try sync_manager.authenticate(loop_alloc, state);
-                    try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
-                },
+                        try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
+                    },
+                    .get_sync_status => {
+                        if (sync_manager.state) |state| {
+                            try msg.client.reply(ipc.IpcResponse{
+                                .sync_status = ipc.SyncStatus{ .synced = .{
+                                    .last_sync = sync_manager.last_sync,
+                                    .host = state.value.host,
+                                    .username = state.value.username,
+                                    .manifests = if (sync_manager.last_sync_manifests) |manifests| manifests.value else null,
+                                } },
+                            });
+                        } else {
+                            try msg.client.reply(ipc.IpcResponse{
+                                .sync_status = ipc.SyncStatus{ .not_synced = .{} },
+                            });
+                        }
+                    },
+                }
             }
+        } else |err| {
+            std.log.err("Error reading IPC messages: {}", .{err});
         }
 
         // Read & handle Inotify events
         const events = try watcher.readEvents(loop_alloc);
+        var db_modified = false;
         for (events.items) |event| {
             std.log.info("Ancestor: {s}, name: {?s}", .{ event.ancestor, event.name });
             try event.printMask();
@@ -237,9 +271,18 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                 .tags = watch_path.tags,
                 .date = date,
             });
+            db_modified = true;
         }
 
-        try sync_manager.sync(loop_alloc);
+        sync_manager.syncPeriodic(loop_alloc) catch |err| {
+            std.log.err("Failed to connect to sync server: {}", .{err});
+        };
+
+        if (db_modified) {
+            sync_manager.syncLocal(loop_alloc) catch |err| {
+                std.log.err("Failed to sync local database: {}", .{err});
+            };
+        }
 
         std.time.sleep(std.time.ns_per_ms * 10);
     }

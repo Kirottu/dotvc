@@ -60,12 +60,11 @@ pub fn download(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
         return;
     };
 
-    const body = try res.arena.alloc(u8, (try file.metadata()).size());
-
-    _ = try file.readAll(body);
+    var body = std.ArrayList(u8).init(res.arena);
+    try std.compress.gzip.compress(file.reader(), body.writer(), .{});
 
     res.content_type = httpz.ContentType.BINARY;
-    res.body = body;
+    res.body = body.items;
 }
 
 pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
@@ -83,6 +82,10 @@ pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
         res.body = "Missing body";
         return;
     };
+    var fbs = std.io.fixedBufferStream(body);
+    var decompressed = std.ArrayList(u8).init(res.arena);
+
+    try std.compress.gzip.decompress(fbs.reader(), decompressed.writer());
 
     const stmt = try (try app.db_conn.prepare(
         res.arena,
@@ -98,11 +101,27 @@ pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
 
     const db_file = try std.fs.cwd().createFile(db_path, .{});
 
-    try db_file.writeAll(body);
+    try db_file.writeAll(decompressed.items);
 }
 
 pub fn delete(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
-    _ = try auth.authenticate(app, req, res, .header) orelse {
+    const username = try auth.authenticate(app, req, res, .header) orelse {
         return;
     };
+    const hostname = req.param("hostname") orelse {
+        res.status = 400;
+        res.body = "Missing hostname";
+        return;
+    };
+
+    const stmt = try (try app.db_conn.prepare(
+        res.arena,
+        "DELETE FROM db_manifests WHERE username = ? AND hostname = ?",
+    )).expect(.stmt);
+
+    _ = try (try app.db_conn.execute(&stmt, .{ username, hostname })).expect(.ok);
+
+    const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", hostname, DB_EXTENSION });
+
+    std.fs.cwd().deleteFile(db_path) catch {};
 }

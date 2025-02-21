@@ -3,16 +3,18 @@ const std = @import("std");
 const root = @import("../main.zig");
 const daemon = @import("daemon.zig");
 
+// FIXME: Needs a more sensible value for the actual default
 const DEFAULT_SYNC_INTERVAL = 10;
 pub const AUX_DATABASE_PATH = "/sync_databases";
 const STATE_FILE = "sync_state.json";
 
 pub const SyncState = struct {
     token: []u8,
+    username: []u8,
     host: []u8,
 };
 
-const Manifest = struct {
+pub const Manifest = struct {
     hostname: []const u8,
     timestamp: i64,
 };
@@ -24,8 +26,10 @@ pub const SyncManager = struct {
     config: *root.Config,
     state: ?root.ArenaAllocated(SyncState),
 
-    last_sync: std.time.Instant,
-    last_sync_manifests: ?root.ArenaAllocated([]Manifest),
+    last_sync: i64 = 0,
+    last_sync_manifests: ?root.ArenaAllocated([]Manifest) = null,
+
+    local_sync_queued: bool = false,
 
     allocator: std.mem.Allocator,
 
@@ -63,8 +67,6 @@ pub const SyncManager = struct {
             .data_dir = data_dir,
             .config = config,
             .state = state,
-            .last_sync = try std.time.Instant.now(),
-            .last_sync_manifests = null,
             .allocator = allocator,
         };
     }
@@ -76,7 +78,7 @@ pub const SyncManager = struct {
         self.state.deinit();
     }
 
-    /// Authenticate sync with a token
+    /// Authenticate sync with a state
     pub fn authenticate(self: *SyncManager, loop_alloc: std.mem.Allocator, new_state: SyncState) !void {
         if (self.state) |*state| {
             _ = state.arena.reset(.retain_capacity);
@@ -112,15 +114,91 @@ pub const SyncManager = struct {
         try file.writeAll(buf.items);
     }
 
-    // FIXME: Bad name, should reflect the periodical function of this function
-    pub fn sync(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
-        const elapsed = (try std.time.Instant.now()).since(self.last_sync);
+    pub fn purge(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
+        const state = self.state orelse return;
+        const url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/delete/", self.hostname });
+
+        var body = std.ArrayList(u8).init(loop_alloc);
+        const res = try self.client.fetch(.{
+            .location = .{ .url = url },
+            .method = .DELETE,
+            .response_storage = .{ .dynamic = &body },
+            .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }},
+        });
+
+        if (res.status != .ok) {
+            std.log.err("Fetching database manifest failed: {}, {s}", .{ res.status, body.items });
+            return;
+        }
+
+        // FIXME: Needs to also delete the synced aux databases
+
+        try self.deauthenticate(loop_alloc);
+    }
+
+    pub fn deauthenticate(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
+        var state = self.state orelse return;
+        state.deinit();
+        self.state = null;
+
+        const state_path = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, "/", STATE_FILE });
+
+        try std.fs.cwd().deleteFile(state_path);
+        var manifests = self.last_sync_manifests orelse return;
+        manifests.deinit();
+        self.last_sync_manifests = null;
+    }
+
+    /// Sync local changes to the configured sync server
+    pub fn syncLocal(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
+        const state = self.state orelse return;
+
+        const db_path = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, daemon.DB_FILE, daemon.DB_EXTENSION });
+        const file = try std.fs.cwd().openFile(db_path, .{});
+
+        const url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/upload/", self.hostname });
+
+        var compressed = std.ArrayList(u8).init(loop_alloc);
+
+        try std.compress.gzip.compress(file.reader(), compressed.writer(), .{});
+
+        std.log.info("Local database compressed with ratio: 1:{d:.1}", .{
+            @as(f32, @floatFromInt((try file.metadata()).size())) / @as(f32, @floatFromInt(compressed.items.len)),
+        });
+
+        const res = self.client.fetch(.{
+            .location = .{ .url = url },
+            .method = .POST,
+            .payload = compressed.items,
+            .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }},
+        }) catch |err| {
+            if (!self.local_sync_queued) {
+                std.log.err("Failed to upload local database, queueing upload: {}", .{err});
+                // If the upload failed (e.g, machine is temporarily offline) queue the upload to make sure the changes get uploaded
+                // when possible
+                self.local_sync_queued = true;
+            }
+            return;
+        };
+
+        self.local_sync_queued = false;
+
+        if (res.status != .ok) {
+            std.log.err("Failed to upload local database: {}", .{res.status});
+        }
+    }
+
+    pub fn syncPeriodic(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
+        const elapsed = std.time.timestamp() - self.last_sync;
         const state = self.state orelse return;
         const sync_interval = self.config.sync_interval orelse DEFAULT_SYNC_INTERVAL;
 
-        if (elapsed > sync_interval * std.time.ns_per_s) {
+        if (elapsed >= sync_interval) {
             std.log.info("Syncing aux databases...", .{});
-            self.last_sync = try std.time.Instant.now();
+            if (self.local_sync_queued) {
+                try self.syncLocal(loop_alloc);
+            }
+            self.last_sync = std.time.timestamp();
 
             const manifest_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/manifest" });
 
@@ -131,11 +209,11 @@ pub const SyncManager = struct {
                 .location = .{ .url = manifest_url },
                 .method = .GET,
                 .response_storage = .{ .dynamic = &body },
-                .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }}, // FIXME: Storage of auth token
+                .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }},
             });
 
             if (res.status != .ok) {
-                std.log.err("Fetching database manifest failed: {}", .{res.status});
+                std.log.err("Fetching database manifest failed: {}, {s}", .{ res.status, body.items });
                 return;
             }
 
@@ -192,7 +270,12 @@ pub const SyncManager = struct {
                 } else {
                     var file = try std.fs.cwd().createFile(db_path, .{});
 
-                    try file.writeAll(db_body.items);
+                    var fbs = std.io.fixedBufferStream(db_body.items);
+                    var decompressed = std.ArrayList(u8).init(loop_alloc);
+
+                    try std.compress.gzip.decompress(fbs.reader(), decompressed.writer());
+
+                    try file.writeAll(decompressed.items);
                 }
             }
 

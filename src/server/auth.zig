@@ -12,6 +12,9 @@ const TextResultRow = myzql.result.TextResultRow;
 const TOKEN_LEN = 32;
 const TOKEN_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
+pub const MIN_USERNAME_LEN = 6;
+pub const MIN_PASSWORD_LEN = 8;
+
 /// Generate a token based on credentials that will be used for any further authenticated request
 pub fn createToken(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const header = req.headers.get("authorization") orelse {
@@ -101,18 +104,31 @@ pub fn createToken(app: *root.App, req: *httpz.Request, res: *httpz.Response) !v
     res.body = new_token;
 }
 
-/// Debug endpoint for creating users
-/// FIXME: Needs to be deleted in favor of some other user creation method
+/// Function for registering a user on the server
+/// NOTE: This endpoint should be guarded with a rate limit
 pub fn register(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const query = try req.query();
     const username = query.get("username") orelse {
         res.status = 400;
+        res.body = "Missing username from query parameters";
         return;
     };
-    const password = query.get("username") orelse {
+    const password = query.get("password") orelse {
         res.status = 400;
+        res.body = "Missing password from query parameters";
         return;
     };
+
+    if (username.len < MIN_USERNAME_LEN) {
+        res.status = 400;
+        res.body = "Username is too short";
+        return;
+    }
+    if (password.len < MIN_PASSWORD_LEN) {
+        res.status = 400;
+        res.body = "Password is too short";
+        return;
+    }
 
     var buf: [256]u8 = undefined;
 
@@ -127,7 +143,16 @@ pub fn register(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
     )).expect(.stmt);
 
     const db_res = try app.db_conn.execute(&stmt, .{ username, out });
-    _ = try db_res.expect(.ok);
+    if (db_res == .err) {
+        // 1062: Duplicate entry for key, aka user already exists
+        if (db_res.err.error_code == 1062) {
+            res.status = 400;
+            res.body = "Username already taken";
+        } else {
+            res.status = 500;
+            res.body = "Internal database error";
+        }
+    }
 }
 
 const AuthenticationMethod = enum {

@@ -50,13 +50,16 @@ pub fn main() !u8 {
     try search_cli.addArg(yazap.Arg.singleValueOption("database", 'd', "Specify which database to use, hostnames are used as database names"));
 
     var sync_cli = app.createCommand("sync", "Manage DotVC Sync connection");
+    sync_cli.setProperty(.subcommand_required);
     {
-        const auth_cli = app.createCommand("auth", "Login to a DotVC Sync server with an existing user");
+        const login_cli = app.createCommand("login", "Login to a DotVC Sync server with an existing user");
+        const logout_cli = app.createCommand("logout", "Logout from DotVC Sync. Data will not be delete from the server");
         const register_cli = app.createCommand("register", "Create a new user on a DotVC Sync server, and log in");
+        const unregister_cli = app.createCommand("delete-account", "Delete account and all data associated with it");
         const purge_cli = app.createCommand("purge", "Delete all data related to the current system from the sync server");
         const status_cli = app.createCommand("status", "View sync status");
 
-        try sync_cli.addSubcommands(&.{ auth_cli, register_cli, purge_cli, status_cli });
+        try sync_cli.addSubcommands(&.{ login_cli, logout_cli, register_cli, unregister_cli, purge_cli, status_cli });
     }
 
     const kill_cli = app.createCommand("kill", "Gracefully shutdown the daemon");

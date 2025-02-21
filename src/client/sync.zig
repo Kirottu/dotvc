@@ -1,8 +1,10 @@
 const std = @import("std");
 const yazap = @import("yazap");
+const zeit = @import("zeit");
 
 const client = @import("client.zig");
 const sync = @import("../daemon/sync.zig");
+const server_auth = @import("../server/auth.zig");
 
 const termios_c = @cImport(@cInclude("termios.h"));
 
@@ -13,6 +15,8 @@ const ANSI_RESET = "\x1B[0m";
 const ANSI_GREEN = "\x1B[32m";
 const ANSI_RED = "\x1B[31m";
 
+const PURGE_CHALLENGE = "Yes, do as I say!";
+
 pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches: yazap.ArgMatches) !void {
     // Arena to make the large amounts of allocations more palatable
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -20,64 +24,54 @@ pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches
 
     defer arena.deinit();
 
-    if (matches.subcommandMatches("auth")) {
+    if (matches.subcommandMatches("login")) |_| {
         try auth(arena_alloc, socket);
-    } else if (matches.subcommandMatches("register")) {
-        // TODO
-    } else if (matches.subcommandMatches("purge")) {
-        // TODO
-    } else {
-        // status
-        // TODO
+    } else if (matches.subcommandMatches("register")) |_| {
+        try register(arena_alloc, socket);
+    } else if (matches.subcommandMatches("purge")) |_| {
+        try purge(arena_alloc, socket);
+    } else if (matches.subcommandMatches("status")) |_| {
+        try status(arena_alloc, socket);
     }
 }
 
 fn auth(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
-    const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
 
     // FIXME: Underline here has some weird behavior
-    try stdout.print("{s}DotVC Sync host: {s}{s}", .{ ANSI_BOLD, ANSI_RESET, ANSI_UL });
-
-    const host = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
-        std.log.err("Invalid host input", .{});
-        return;
-    };
+    const host = try prompt(
+        allocator,
+        false,
+        "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
+        .{ ANSI_BOLD, ANSI_RESET, ANSI_UL },
+    );
     const url = try std.mem.concat(allocator, u8, &.{ host, "/auth/token" });
 
-    const uri = std.Uri.parse(url) catch |err| {
-        try stdout.print("{s}{s}{s}Error parsing host URL:{s} {}\n", .{ ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_RESET, err });
-        return;
-    };
-
-    if (!std.mem.startsWith(u8, uri.scheme, "http")) {
+    if (!std.mem.startsWith(u8, url, "http")) {
         try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_RESET });
         return;
     }
 
-    try stdout.print("{s}{s}Username: {s}", .{ ANSI_RESET, ANSI_BOLD, ANSI_RESET });
-    const username = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
-        std.log.err("Invalid username input", .{});
-        return;
-    };
+    const username = try prompt(
+        allocator,
+        false,
+        "{s}{s}Username: {s}",
+        .{ ANSI_RESET, ANSI_BOLD, ANSI_RESET },
+    );
+    const password = try prompt(
+        allocator,
+        true,
+        "{s}Password: {s}",
+        .{ ANSI_BOLD, ANSI_RESET },
+    );
 
-    try stdout.print("{s}Password: {s}", .{ ANSI_BOLD, ANSI_RESET });
+    try authenticate(allocator, socket, url, username, password);
 
-    const termios = try std.posix.tcgetattr(std.posix.STDOUT_FILENO);
-    var t = termios;
+    try stdout.print("{s}{s}Successfully authenticated to host!{s}\n", .{ ANSI_BOLD, ANSI_GREEN, ANSI_RESET });
+}
 
-    // Disable echoing to hide password as it is being typed
-    t.lflag.ECHO = false;
-
-    try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, t);
-
-    const password = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
-        std.log.err("Invalid username input", .{});
-        return;
-    };
-
-    try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, termios);
-
+/// Helper function to authenticate the daemon
+fn authenticate(allocator: std.mem.Allocator, socket: std.posix.socket_t, host: []u8, username: []const u8, password: []const u8) !void {
     const credentials = try std.mem.concat(allocator, u8, &.{ username, ":", password });
 
     const encoder = std.base64.standard.Encoder;
@@ -88,22 +82,237 @@ fn auth(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     var http_client = std.http.Client{ .allocator = allocator };
     var body = std.ArrayList(u8).init(allocator);
 
+    const url = try std.mem.concat(allocator, u8, &.{ host, "/auth/token" });
+
     const res = try http_client.fetch(.{
-        .location = .{ .uri = uri },
+        .location = .{ .url = url },
         .method = .GET,
         .response_storage = .{ .dynamic = &body },
         .extra_headers = &.{std.http.Header{ .name = "Authorization", .value = auth_header }},
     });
 
     if (res.status != .ok) {
-        std.log.err("Server responded with a non-ok response: {}, {s}", .{ res.status, body.items });
+        try std.io.getStdOut().writer().print(
+            "{s}{s}{}{s}, {s}",
+            .{ ANSI_RED, ANSI_BOLD, res.status, ANSI_RESET, body.items },
+        );
+        std.process.exit(1);
+    }
+
+    _ = try client.ipcMessage(allocator, socket, .{ .authenticate = sync.SyncState{
+        .token = body.items,
+        .username = username,
+        .host = host,
+    } });
+}
+
+fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    // FIXME: Underline here has some weird behavior
+    const host = try prompt(
+        allocator,
+        false,
+        "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
+        .{ ANSI_BOLD, ANSI_RESET, ANSI_UL },
+    );
+
+    if (!std.mem.startsWith(u8, host, "http")) {
+        try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_RESET });
         return;
     }
 
-    _ = try http_client.ipcMessage(allocator, socket, .{ .authenticate = sync.SyncState{
-        .token = body.items,
-        .host = host,
-    } });
+    const username = try prompt(
+        allocator,
+        false,
+        "{s}{s}Username{s} (at least {} characters): ",
+        .{ ANSI_RESET, ANSI_BOLD, ANSI_RESET, server_auth.MIN_USERNAME_LEN },
+    );
+    const p1 = try prompt(
+        allocator,
+        true,
+        "{s}Password{s} (at least {} characters): ",
+        .{ ANSI_BOLD, ANSI_RESET, server_auth.MIN_PASSWORD_LEN },
+    );
+    const p2 = try prompt(
+        allocator,
+        true,
+        "{s}Repeat password{s}: ",
+        .{ ANSI_BOLD, ANSI_RESET },
+    );
 
-    try stdout.print("\n{s}{s}Successfully authenticated to host!{s}\n", .{ ANSI_BOLD, ANSI_GREEN, ANSI_RESET });
+    if (!std.mem.eql(u8, p1, p2)) {
+        try stdout.print(
+            "{s}{s}Passwords do not match.{s}",
+            .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+        );
+        return;
+    }
+
+    const url = try std.mem.concat(
+        allocator,
+        u8,
+        &.{ host, "/auth/register?username=", username, "&password=", p1 },
+    );
+
+    var http_client = std.http.Client{ .allocator = allocator };
+    var body = std.ArrayList(u8).init(allocator);
+
+    const res = try http_client.fetch(.{
+        .location = .{ .url = url },
+        .method = .POST,
+        .response_storage = .{ .dynamic = &body },
+    });
+
+    if (res.status != .ok) {
+        try stdout.print(
+            "{s}{s}{}{s}, {s}",
+            .{ ANSI_RED, ANSI_BOLD, res.status, ANSI_RESET, body.items },
+        );
+        return;
+    }
+
+    try authenticate(allocator, socket, host, username, p1);
+
+    try stdout.print(
+        "{s}{s}Successfully registered & logged into the host!{s}\n",
+        .{ ANSI_BOLD, ANSI_GREEN, ANSI_RESET },
+    );
+}
+
+fn purge(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    const input = try prompt(
+        allocator,
+        false,
+        \\{s}{s}Warning!{s}
+        \\What you are about to do will delete all data related to this machine from the server,
+        \\and consequently from all other machines logged into this user.
+        \\This will also log you out from sync.
+        \\
+        \\To proceed, type {s}{s}{s}: 
+    ,
+        .{ ANSI_RED, ANSI_BOLD, ANSI_RESET, ANSI_BOLD, PURGE_CHALLENGE, ANSI_RESET },
+    );
+
+    if (!std.mem.eql(u8, input, PURGE_CHALLENGE)) {
+        try std.io.getStdOut().writer().print(
+            "{s}{s}Input does not match challenge.{s}\n",
+            .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+        );
+        return;
+    }
+
+    const ipc_res = try client.ipcMessage(allocator, socket, .{ .get_sync_status = .{} });
+
+    if (ipc_res.value.sync_status == .not_synced) {
+        try stdout.print("Not connected to sync, can't purge anything that doesn't exist.\n", .{});
+        return;
+    }
+
+    _ = try client.ipcMessage(allocator, socket, .{ .purge_sync = .{} });
+
+    try stdout.print("Data successfully purged.", .{});
+}
+
+fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
+    const stdout = std.io.getStdOut().writer();
+    const res = try client.ipcMessage(allocator, socket, .{ .get_sync_status = .{} });
+    const local_tz = try zeit.local(allocator, null);
+
+    var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
+    const hostname = try std.posix.gethostname(&hostname_buf);
+
+    switch (res.value.sync_status) {
+        .not_synced => {
+            try stdout.print(
+                \\{s}{s}Not synced!{s}
+                \\
+                \\Login to a DotVC Sync server with `dotvc sync login`
+            ,
+                .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+            );
+        },
+        .synced => |synced| {
+            const sync_time = try timeStr(allocator, &local_tz, synced.last_sync);
+            try stdout.print(
+                \\Logged in as {s}{}{s} on {s}{}{s}
+                \\Last sync: {s}{s}{s}
+                \\
+            ,
+                .{
+                    ANSI_BOLD,
+                    synced.username,
+                    ANSI_RESET,
+                    ANSI_UL,
+                    synced.host,
+                    ANSI_RESET,
+                    ANSI_BOLD,
+                    sync_time.items,
+                    ANSI_RESET,
+                },
+            );
+
+            if (synced.manifests) |manifests| {
+                try stdout.print("Synced databases:\n\n", .{});
+
+                for (manifests) |manifest| {
+                    const time_str = try timeStr(allocator, &local_tz, manifest.timestamp);
+                    const postfix = if (std.mem.eql(u8, hostname, manifest.hostname)) " [this machine]" else "";
+                    try stdout.print(
+                        "  {s}{s}{s}{s}{s}: {s}\n",
+                        .{ ANSI_BOLD, ANSI_GREEN, manifest.hostname, ANSI_RESET, postfix, time_str.items },
+                    );
+                }
+            } else {
+                try stdout.print(
+                    \\{s}{s}No sync manifest available!{s}
+                    \\
+                    \\Is the machine connected to the internet? Check daemon output for possible connection errors
+                    \\or initiate sync now with `dotvc sync now`.
+                ,
+                    .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+                );
+            }
+        },
+    }
+}
+
+fn timeStr(allocator: std.mem.Allocator, tz: *const zeit.TimeZone, timestamp: i64) !std.ArrayList(u8) {
+    const zeit_timestamp = try zeit.instant(.{ .source = .{ .unix_timestamp = timestamp } });
+    const local = zeit_timestamp.in(tz);
+    var time = std.ArrayList(u8).init(allocator);
+
+    try local.time().strftime(time.writer(), "%Y-%m-%d %H:%M:%S");
+    return time;
+}
+
+fn prompt(allocator: std.mem.Allocator, hide_input: bool, comptime fmt: []const u8, args: anytype) ![]u8 {
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+
+    try stdout.print(fmt, args);
+
+    const termios = try std.posix.tcgetattr(std.posix.STDOUT_FILENO);
+    if (hide_input) {
+        var t = termios;
+
+        // Disable echoing to hide password as it is being typed
+        t.lflag.ECHO = false;
+
+        try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, t);
+    }
+
+    const out = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
+        try stdout.print("{s}Invalid input{s}\n", .{ ANSI_RED, ANSI_RESET });
+        std.process.exit(1);
+    };
+
+    if (hide_input) {
+        try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, termios);
+        try stdout.print("\n", .{});
+    }
+
+    return out;
 }
