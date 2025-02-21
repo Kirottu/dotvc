@@ -25,7 +25,9 @@ pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches
     defer arena.deinit();
 
     if (matches.subcommandMatches("login")) |_| {
-        try auth(arena_alloc, socket);
+        try login(arena_alloc, socket);
+    } else if (matches.subcommandMatches("logout")) {
+        try logout(arena_alloc, socket);
     } else if (matches.subcommandMatches("register")) |_| {
         try register(arena_alloc, socket);
     } else if (matches.subcommandMatches("purge")) |_| {
@@ -35,7 +37,7 @@ pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches
     }
 }
 
-fn auth(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
+fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     const stdout = std.io.getStdOut().writer();
 
     // FIXME: Underline here has some weird behavior
@@ -45,9 +47,8 @@ fn auth(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
         .{ ANSI_BOLD, ANSI_RESET, ANSI_UL },
     );
-    const url = try std.mem.concat(allocator, u8, &.{ host, "/auth/token" });
 
-    if (!std.mem.startsWith(u8, url, "http")) {
+    if (!std.mem.startsWith(u8, host, "http")) {
         try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_RESET });
         return;
     }
@@ -65,45 +66,38 @@ fn auth(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         .{ ANSI_BOLD, ANSI_RESET },
     );
 
-    try authenticate(allocator, socket, url, username, password);
+    var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
+    const hostname = try std.posix.gethostname(&hostname_buf);
+
+    const db_name_input = try prompt(
+        allocator,
+        false,
+        "{s}Machine name{s} (leave empty for \"{s}\"): ",
+        .{ ANSI_BOLD, ANSI_RESET, hostname },
+    );
+    const db_name = if (db_name_input.len == 0) hostname else db_name_input;
+
+    try authenticate(allocator, socket, host, username, password, db_name);
 
     try stdout.print("{s}{s}Successfully authenticated to host!{s}\n", .{ ANSI_BOLD, ANSI_GREEN, ANSI_RESET });
 }
 
-/// Helper function to authenticate the daemon
-fn authenticate(allocator: std.mem.Allocator, socket: std.posix.socket_t, host: []u8, username: []const u8, password: []const u8) !void {
-    const credentials = try std.mem.concat(allocator, u8, &.{ username, ":", password });
-
-    const encoder = std.base64.standard.Encoder;
-    const credentials_buf = try allocator.alloc(u8, encoder.calcSize(credentials.len));
-    const credentials_base64 = encoder.encode(credentials_buf, credentials);
-    const auth_header = try std.mem.concat(allocator, u8, &.{ "Basic: ", credentials_base64 });
-
-    var http_client = std.http.Client{ .allocator = allocator };
-    var body = std.ArrayList(u8).init(allocator);
-
-    const url = try std.mem.concat(allocator, u8, &.{ host, "/auth/token" });
-
-    const res = try http_client.fetch(.{
-        .location = .{ .url = url },
-        .method = .GET,
-        .response_storage = .{ .dynamic = &body },
-        .extra_headers = &.{std.http.Header{ .name = "Authorization", .value = auth_header }},
-    });
-
-    if (res.status != .ok) {
-        try std.io.getStdOut().writer().print(
-            "{s}{s}{}{s}, {s}",
-            .{ ANSI_RED, ANSI_BOLD, res.status, ANSI_RESET, body.items },
-        );
-        std.process.exit(1);
+fn logout(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
+    const answer = try prompt(
+        allocator,
+        false,
+        \\Logging out will only log you out of the account.
+        \\It will not delete databases that have been downloaded from the Sync server.
+        \\If you also want to delete those databases, use `dotvc sync purge`.
+        \\
+        \\{s}Are you sure?{s} [y/N]:
+    ,
+        .{ ANSI_BOLD, ANSI_RESET },
+    );
+    if (std.mem.eql(u8, answer, "y") or std.mem.eql(u8, answer, "Y")) {
+        _ = try client.ipcMessage(allocator, socket, .{ .sync_logout = .{} });
+        try std.io.getStdOut().writer().print("Successfully logged out.\n", .{});
     }
-
-    _ = try client.ipcMessage(allocator, socket, .{ .authenticate = sync.SyncState{
-        .token = body.items,
-        .username = username,
-        .host = host,
-    } });
 }
 
 fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
@@ -149,6 +143,16 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         return;
     }
 
+    var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
+    const hostname = try std.posix.gethostname(&hostname_buf);
+
+    const db_name_input = try prompt(
+        allocator,
+        false,
+        "{s}Machine name{s} (leave empty for \"{s}\"): ",
+        .{ ANSI_BOLD, ANSI_RESET, hostname },
+    );
+    const db_name = if (db_name_input.len == 0) hostname else db_name_input;
     const url = try std.mem.concat(
         allocator,
         u8,
@@ -172,7 +176,7 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         return;
     }
 
-    try authenticate(allocator, socket, host, username, p1);
+    try authenticate(allocator, socket, host, username, p1, db_name);
 
     try stdout.print(
         "{s}{s}Successfully registered & logged into the host!{s}\n",
@@ -187,11 +191,15 @@ fn purge(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         \\{s}{s}Warning!{s}
-        \\What you are about to do will delete all data related to this machine from the server,
-        \\and consequently from all other machines logged into this user.
-        \\This will also log you out from sync.
+        \\This will purge all data related to the existing sync connection.
+        \\
+        \\This data includes:
+        \\ - The local database on the server
+        \\ - The remote databases on the local machine
+        \\ - Local configuration of the sync connection
         \\
         \\To proceed, type {s}{s}{s}: 
+        \\
     ,
         .{ ANSI_RED, ANSI_BOLD, ANSI_RESET, ANSI_BOLD, PURGE_CHALLENGE, ANSI_RESET },
     );
@@ -213,7 +221,7 @@ fn purge(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
 
     _ = try client.ipcMessage(allocator, socket, .{ .purge_sync = .{} });
 
-    try stdout.print("Data successfully purged.", .{});
+    try stdout.print("\nData successfully purged.\n", .{});
 }
 
 fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
@@ -221,15 +229,13 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     const res = try client.ipcMessage(allocator, socket, .{ .get_sync_status = .{} });
     const local_tz = try zeit.local(allocator, null);
 
-    var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
-    const hostname = try std.posix.gethostname(&hostname_buf);
-
     switch (res.value.sync_status) {
         .not_synced => {
             try stdout.print(
                 \\{s}{s}Not synced!{s}
                 \\
                 \\Login to a DotVC Sync server with `dotvc sync login`
+                \\
             ,
                 .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
             );
@@ -237,8 +243,9 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         .synced => |synced| {
             const sync_time = try timeStr(allocator, &local_tz, synced.last_sync);
             try stdout.print(
-                \\Logged in as {s}{}{s} on {s}{}{s}
+                \\Logged in as {s}{s}{s} on {s}{s}{s}
                 \\Last sync: {s}{s}{s}
+                \\
                 \\
             ,
                 .{
@@ -255,14 +262,14 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
             );
 
             if (synced.manifests) |manifests| {
-                try stdout.print("Synced databases:\n\n", .{});
+                try stdout.print("Synced databases:\n", .{});
 
                 for (manifests) |manifest| {
                     const time_str = try timeStr(allocator, &local_tz, manifest.timestamp);
-                    const postfix = if (std.mem.eql(u8, hostname, manifest.hostname)) " [this machine]" else "";
+                    const postfix = if (std.mem.eql(u8, synced.db_name, manifest.name)) " [this machine]" else "";
                     try stdout.print(
                         "  {s}{s}{s}{s}{s}: {s}\n",
-                        .{ ANSI_BOLD, ANSI_GREEN, manifest.hostname, ANSI_RESET, postfix, time_str.items },
+                        .{ ANSI_BOLD, ANSI_GREEN, manifest.name, ANSI_RESET, postfix, time_str.items },
                     );
                 }
             } else {
@@ -271,12 +278,57 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
                     \\
                     \\Is the machine connected to the internet? Check daemon output for possible connection errors
                     \\or initiate sync now with `dotvc sync now`.
+                    \\
                 ,
                     .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
                 );
             }
         },
     }
+}
+
+/// Helper function to authenticate the daemon
+fn authenticate(
+    allocator: std.mem.Allocator,
+    socket: std.posix.socket_t,
+    host: []u8,
+    username: []const u8,
+    password: []const u8,
+    db_name: []const u8,
+) !void {
+    const credentials = try std.mem.concat(allocator, u8, &.{ username, ":", password });
+
+    const encoder = std.base64.standard.Encoder;
+    const credentials_buf = try allocator.alloc(u8, encoder.calcSize(credentials.len));
+    const credentials_base64 = encoder.encode(credentials_buf, credentials);
+    const auth_header = try std.mem.concat(allocator, u8, &.{ "Basic: ", credentials_base64 });
+
+    var http_client = std.http.Client{ .allocator = allocator };
+    var body = std.ArrayList(u8).init(allocator);
+
+    const url = try std.mem.concat(allocator, u8, &.{ host, "/auth/token" });
+
+    const res = try http_client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .response_storage = .{ .dynamic = &body },
+        .extra_headers = &.{std.http.Header{ .name = "Authorization", .value = auth_header }},
+    });
+
+    if (res.status != .ok) {
+        try std.io.getStdOut().writer().print(
+            "{s}{s}{}{s}, {s}",
+            .{ ANSI_RED, ANSI_BOLD, res.status, ANSI_RESET, body.items },
+        );
+        std.process.exit(1);
+    }
+
+    _ = try client.ipcMessage(allocator, socket, .{ .authenticate = sync.SyncState{
+        .token = body.items,
+        .db_name = db_name,
+        .username = username,
+        .host = host,
+    } });
 }
 
 fn timeStr(allocator: std.mem.Allocator, tz: *const zeit.TimeZone, timestamp: i64) !std.ArrayList(u8) {

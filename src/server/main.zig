@@ -2,19 +2,20 @@ const std = @import("std");
 const httpz = @import("httpz");
 const myzql = @import("myzql");
 const yazap = @import("yazap");
+const toml = @import("zig-toml");
 
 const auth = @import("auth.zig");
 const cron = @import("cron.zig");
 const databases = @import("databases.zig");
 
+const Config = struct {
+    registrations_enabled: bool,
+    port: u16,
+};
+
 pub const App = struct {
     db_conn: myzql.conn.Conn,
-
-    pub fn init(_: std.mem.Allocator, db_conn: myzql.conn.Conn) !App {
-        return App{
-            .db_conn = db_conn,
-        };
-    }
+    config: Config,
 
     pub fn deinit(self: *App) void {
         self.db_conn.deinit();
@@ -54,8 +55,13 @@ pub fn main() !void {
     defer {
         _ = gpa.detectLeaks();
     }
-
     const allocator = gpa.allocator();
+
+    var parser = toml.Parser(Config).init(allocator);
+    defer parser.deinit();
+
+    var result = try parser.parseFile("config.toml");
+    defer result.deinit();
 
     var yazap_app = yazap.App.init(allocator, "DotVC server", "DotVC server software to facilitate sync between clients");
     defer yazap_app.deinit();
@@ -75,9 +81,16 @@ pub fn main() !void {
     if (matches.containsArg("cron")) {
         try cron.cron(allocator, &db_conn);
     } else {
-        var app = try App.init(allocator, db_conn);
+        var app = try App{
+            .db_conn = db_conn,
+            .config = result.value,
+        };
 
-        var server = try httpz.Server(*App).init(allocator, .{ .port = 3001 }, &app);
+        var server = try httpz.Server(*App).init(
+            allocator,
+            .{ .port = result.value.port },
+            &app,
+        );
         defer {
             server.stop();
             server.deinit();
@@ -87,9 +100,9 @@ pub fn main() !void {
         router.post("/auth/register", auth.register, .{});
         router.get("/auth/token", auth.createToken, .{});
         router.get("/databases/manifest", databases.manifest, .{});
-        router.get("/databases/download/:hostname", databases.download, .{});
-        router.post("/databases/upload/:hostname", databases.upload, .{});
-        router.delete("/databases/delete/:hostname", databases.delete, .{});
+        router.get("/databases/download/:name", databases.download, .{});
+        router.post("/databases/upload/:name", databases.upload, .{});
+        router.delete("/databases/delete/:name", databases.delete, .{});
 
         try server.listen();
     }

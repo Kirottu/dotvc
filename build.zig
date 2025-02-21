@@ -48,6 +48,7 @@ pub fn build(b: *std.Build) void {
     server_exe.root_module.addImport("httpz", httpz);
     server_exe.root_module.addImport("myzql", myzql);
     server_exe.root_module.addImport("yazap", yazap);
+    server_exe.root_module.addImport("zig-toml", zig_toml);
 
     const client_step = b.step("client", "Build client");
     const server_step = b.step("server", "Build server");

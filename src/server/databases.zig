@@ -14,13 +14,13 @@ pub fn manifest(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
     };
 
     const Record = struct {
-        hostname: []const u8,
+        name: []const u8,
         timestamp: i64,
     };
 
     const stmt = try (try app.db_conn.prepare(
         res.arena,
-        "SELECT hostname, UNIX_TIMESTAMP(modified) FROM db_manifests WHERE username = ?",
+        "SELECT name, UNIX_TIMESTAMP(modified) FROM db_manifests WHERE username = ?",
     )).expect(.stmt);
     const rows = try (try app.db_conn.executeRows(&stmt, .{username}))
         .expect(.rows);
@@ -41,13 +41,13 @@ pub fn download(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
     const username = try auth.authenticate(app, req, res, .header) orelse {
         return;
     };
-    const hostname = req.param("hostname") orelse {
+    const db_name = req.param("name") orelse {
         res.status = 400;
-        res.body = "Missing hostname";
+        res.body = "Missing database name";
         return;
     };
 
-    const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", hostname, DB_EXTENSION });
+    const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", db_name, DB_EXTENSION });
 
     const file = std.fs.cwd().openFile(db_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
@@ -71,9 +71,9 @@ pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const username = try auth.authenticate(app, req, res, .header) orelse {
         return;
     };
-    const hostname = req.param("hostname") orelse {
+    const db_name = req.param("name") orelse {
         res.status = 400;
-        res.body = "Missing hostname";
+        res.body = "Missing database name";
         return;
     };
 
@@ -92,12 +92,12 @@ pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
         "INSERT INTO db_manifests VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE modified = NOW()",
     )).expect(.stmt);
 
-    _ = try (try app.db_conn.execute(&stmt, .{ username, hostname })).expect(.ok);
+    _ = try (try app.db_conn.execute(&stmt, .{ username, db_name })).expect(.ok);
 
     const user_dir = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username });
     try std.fs.cwd().makePath(user_dir);
 
-    const db_path = try std.mem.concat(res.arena, u8, &.{ user_dir, "/", hostname, DB_EXTENSION });
+    const db_path = try std.mem.concat(res.arena, u8, &.{ user_dir, "/", db_name, DB_EXTENSION });
 
     const db_file = try std.fs.cwd().createFile(db_path, .{});
 
@@ -108,20 +108,20 @@ pub fn delete(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const username = try auth.authenticate(app, req, res, .header) orelse {
         return;
     };
-    const hostname = req.param("hostname") orelse {
+    const db_name = req.param("name") orelse {
         res.status = 400;
-        res.body = "Missing hostname";
+        res.body = "Missing database name";
         return;
     };
 
     const stmt = try (try app.db_conn.prepare(
         res.arena,
-        "DELETE FROM db_manifests WHERE username = ? AND hostname = ?",
+        "DELETE FROM db_manifests WHERE username = ? AND name = ?",
     )).expect(.stmt);
 
-    _ = try (try app.db_conn.execute(&stmt, .{ username, hostname })).expect(.ok);
+    _ = try (try app.db_conn.execute(&stmt, .{ username, db_name })).expect(.ok);
 
-    const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", hostname, DB_EXTENSION });
+    const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", db_name, DB_EXTENSION });
 
     std.fs.cwd().deleteFile(db_path) catch {};
 }

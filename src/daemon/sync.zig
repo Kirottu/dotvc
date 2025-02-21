@@ -9,19 +9,19 @@ pub const AUX_DATABASE_PATH = "/sync_databases";
 const STATE_FILE = "sync_state.json";
 
 pub const SyncState = struct {
-    token: []u8,
-    username: []u8,
-    host: []u8,
+    token: []const u8,
+    db_name: []const u8,
+    username: []const u8,
+    host: []const u8,
 };
 
 pub const Manifest = struct {
-    hostname: []const u8,
+    name: []const u8,
     timestamp: i64,
 };
 
 pub const SyncManager = struct {
     client: std.http.Client,
-    hostname: []const u8,
     data_dir: []const u8,
     config: *root.Config,
     state: ?root.ArenaAllocated(SyncState),
@@ -34,11 +34,6 @@ pub const SyncManager = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, data_dir: []const u8, config: *root.Config) !SyncManager {
-        var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
-        const hostname = try std.posix.gethostname(&hostname_buf);
-        const hostname_alloc = try allocator.alloc(u8, hostname.len);
-        @memcpy(hostname_alloc, hostname);
-
         const client = std.http.Client{ .allocator = allocator };
 
         const state_path = try std.mem.concat(allocator, u8, &.{ data_dir, "/", STATE_FILE });
@@ -63,7 +58,6 @@ pub const SyncManager = struct {
 
         return SyncManager{
             .client = client,
-            .hostname = hostname_alloc,
             .data_dir = data_dir,
             .config = config,
             .state = state,
@@ -72,32 +66,35 @@ pub const SyncManager = struct {
     }
 
     pub fn deinit(self: *SyncManager) void {
-        self.allocator.free(self.hostname);
         self.last_sync_manifests.deinit();
         self.client.deinit();
         self.state.deinit();
     }
 
     /// Authenticate sync with a state
-    pub fn authenticate(self: *SyncManager, loop_alloc: std.mem.Allocator, new_state: SyncState) !void {
+    pub fn login(self: *SyncManager, loop_alloc: std.mem.Allocator, new_state: SyncState) !void {
         if (self.state) |*state| {
-            _ = state.arena.reset(.retain_capacity);
-            state.value.token = try state.arena.allocator().alloc(u8, new_state.token.len);
-            state.value.host = try state.arena.allocator().alloc(u8, new_state.host.len);
-            @memcpy(state.value.token, new_state.token);
-            @memcpy(state.value.host, new_state.host);
+            state.deinit();
         } else {
             var arena = std.heap.ArenaAllocator.init(self.allocator);
-            const state = SyncState{
-                .token = try arena.allocator().alloc(u8, new_state.token.len),
-                .host = try arena.allocator().alloc(u8, new_state.host.len),
-            };
+            const token = try arena.allocator().alloc(u8, new_state.token.len);
+            const host = try arena.allocator().alloc(u8, new_state.host.len);
+            const db_name = try arena.allocator().alloc(u8, new_state.db_name.len);
+            const username = try arena.allocator().alloc(u8, new_state.username.len);
 
-            @memcpy(state.token, new_state.token);
-            @memcpy(state.host, new_state.host);
+            @memcpy(token, new_state.token);
+            @memcpy(host, new_state.host);
+            @memcpy(db_name, new_state.db_name);
+            @memcpy(username, new_state.username);
+
             self.state = .{
                 .arena = arena,
-                .value = state,
+                .value = .{
+                    .token = token,
+                    .host = host,
+                    .db_name = db_name,
+                    .username = username,
+                },
             };
         }
 
@@ -116,7 +113,11 @@ pub const SyncManager = struct {
 
     pub fn purge(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
         const state = self.state orelse return;
-        const url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/delete/", self.hostname });
+        const url = try std.mem.concat(
+            loop_alloc,
+            u8,
+            &.{ state.value.host, "/databases/delete/", state.value.db_name },
+        );
 
         var body = std.ArrayList(u8).init(loop_alloc);
         const res = try self.client.fetch(.{
@@ -131,12 +132,10 @@ pub const SyncManager = struct {
             return;
         }
 
-        // FIXME: Needs to also delete the synced aux databases
-
-        try self.deauthenticate(loop_alloc);
+        try self.logout(loop_alloc);
     }
 
-    pub fn deauthenticate(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
+    pub fn logout(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
         var state = self.state orelse return;
         state.deinit();
         self.state = null;
@@ -156,7 +155,7 @@ pub const SyncManager = struct {
         const db_path = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, daemon.DB_FILE, daemon.DB_EXTENSION });
         const file = try std.fs.cwd().openFile(db_path, .{});
 
-        const url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/upload/", self.hostname });
+        const url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/upload/", state.value.db_name });
 
         var compressed = std.ArrayList(u8).init(loop_alloc);
 
@@ -226,9 +225,9 @@ pub const SyncManager = struct {
                 var found = false;
                 if (self.last_sync_manifests) |last_manifests| {
                     for (last_manifests.value) |last_manifest| {
-                        if (std.mem.eql(u8, last_manifest.hostname, manifest.hostname)) {
+                        if (std.mem.eql(u8, last_manifest.name, manifest.name)) {
                             if (last_manifest.timestamp < manifest.timestamp) {
-                                try databases_to_sync.append(manifest.hostname);
+                                try databases_to_sync.append(manifest.name);
                             }
                             found = true;
                         }
@@ -236,16 +235,16 @@ pub const SyncManager = struct {
                 }
 
                 if (!found) {
-                    try databases_to_sync.append(manifest.hostname);
+                    try databases_to_sync.append(manifest.name);
                 }
             }
 
-            for (databases_to_sync.items) |hostname| {
-                if (std.mem.eql(u8, hostname, self.hostname)) {
+            for (databases_to_sync.items) |db_name| {
+                if (std.mem.eql(u8, db_name, state.value.db_name)) {
                     continue;
                 }
                 var db_body = std.ArrayList(u8).init(loop_alloc);
-                const db_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/download/", hostname });
+                const db_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/download/", db_name });
                 const db_res = try self.client.fetch(.{
                     .location = .{ .url = db_url },
                     .method = .GET,
@@ -256,7 +255,7 @@ pub const SyncManager = struct {
                 const aux_dbs = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, AUX_DATABASE_PATH });
                 try std.fs.cwd().makePath(aux_dbs);
 
-                const db_path = try std.mem.concat(loop_alloc, u8, &.{ aux_dbs, "/", hostname, daemon.DB_EXTENSION });
+                const db_path = try std.mem.concat(loop_alloc, u8, &.{ aux_dbs, "/", db_name, daemon.DB_EXTENSION });
 
                 if (db_res.status == .gone) {
                     std.log.info("Database removed from server, removing...", .{});

@@ -107,6 +107,12 @@ pub fn createToken(app: *root.App, req: *httpz.Request, res: *httpz.Response) !v
 /// Function for registering a user on the server
 /// NOTE: This endpoint should be guarded with a rate limit
 pub fn register(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.config.registrations_enabled) {
+        res.status = 403;
+        res.body = "Registration is disabled on this server";
+        return;
+    }
+
     const query = try req.query();
     const username = query.get("username") orelse {
         res.status = 400;

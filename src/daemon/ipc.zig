@@ -18,9 +18,9 @@ pub const IpcMsg = union(enum) {
     get_all_dotfiles: ?[]const u8,
     get_dotfile: IpcGetDotfile,
 
-    authenticate: sync.SyncState,
+    sync_login: sync.SyncState,
     purge_sync: struct {},
-    deauthenticate: struct {},
+    sync_logout: struct {},
     get_sync_status: struct {},
 };
 
@@ -52,6 +52,7 @@ pub const SyncStatus = union(enum) {
     synced: struct {
         last_sync: i64,
         host: []const u8,
+        db_name: []const u8,
         username: []const u8,
         manifests: ?[]sync.Manifest,
     },

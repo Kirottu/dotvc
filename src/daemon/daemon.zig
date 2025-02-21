@@ -177,14 +177,14 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                             db.deinit();
                         }
                     },
-                    .authenticate => |state| {
-                        sync_manager.authenticate(loop_alloc, state) catch |err| {
+                    .sync_login => |state| {
+                        sync_manager.login(loop_alloc, state) catch |err| {
                             std.log.err("Failed to authenticate sync: {}", .{err});
                         };
                         try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
                     },
-                    .deauthenticate => {
-                        sync_manager.deauthenticate(loop_alloc) catch |err| {
+                    .sync_logout => {
+                        sync_manager.logout(loop_alloc) catch |err| {
                             std.log.err("Failed to deauthenticate sync: {}", .{err});
                         };
                         try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
@@ -201,6 +201,7 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                                 .sync_status = ipc.SyncStatus{ .synced = .{
                                     .last_sync = sync_manager.last_sync,
                                     .host = state.value.host,
+                                    .db_name = state.value.db_name,
                                     .username = state.value.username,
                                     .manifests = if (sync_manager.last_sync_manifests) |manifests| manifests.value else null,
                                 } },

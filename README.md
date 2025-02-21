@@ -1,18 +1,12 @@
 # DotVC
+An automated version control software made for storing and sharing revisions of dotfiles.
 
-# TODO
+# Features
+- A background daemon that automatically keeps track of changes to the configured paths/files
+- An interactive TUI app to search for specific revisions of dotfiles
+- Ability to use an external server to sync dotfiles to different machines
 
-## Local:
-- Configuration file and helper command for quickly adding a dotfile to the list of managed files
-- sqlite database for storing file revisions
-  - Database schema
-- Easy to use command to quickly pull a revision of a config file and edit it
-- Filesystem listener to add dotfile revisions as they are edited (inotify)
-  - Constantly running daemon
+# Sync
+DotVC Sync is implemented so that every machine that is logged in to a specific user will get
+a database of a specified name (hostname by default).
 
-## Sync:
-- Web server
-  - User authentication
-  - Handling sqlite databases
-    - Encryption
-  - Options in the local client to interface with the server
