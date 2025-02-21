@@ -5,6 +5,7 @@ const daemon = @import("daemon.zig");
 
 const DEFAULT_SYNC_INTERVAL = 10;
 pub const AUX_DATABASE_PATH = "/sync_databases";
+const STATE_FILE = "sync_state.json";
 
 pub const SyncState = struct {
     token: []u8,
@@ -36,7 +37,7 @@ pub const SyncManager = struct {
 
         const client = std.http.Client{ .allocator = allocator };
 
-        const state_path = try std.mem.concat(allocator, u8, &.{ data_dir, "/sync_state.json" });
+        const state_path = try std.mem.concat(allocator, u8, &.{ data_dir, "/", STATE_FILE });
         const state_file = std.fs.cwd().openFile(state_path, .{}) catch null;
 
         defer allocator.free(state_path);
@@ -76,7 +77,7 @@ pub const SyncManager = struct {
     }
 
     /// Authenticate sync with a token
-    pub fn authenticate(self: *SyncManager, new_state: SyncState) !void {
+    pub fn authenticate(self: *SyncManager, loop_alloc: std.mem.Allocator, new_state: SyncState) !void {
         if (self.state) |*state| {
             _ = state.arena.reset(.retain_capacity);
             state.value.token = try state.arena.allocator().alloc(u8, new_state.token.len);
@@ -97,6 +98,18 @@ pub const SyncManager = struct {
                 .value = state,
             };
         }
+
+        var buf = std.ArrayList(u8).init(loop_alloc);
+        try std.json.stringify(new_state, .{}, buf.writer());
+
+        const state_path = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, "/", STATE_FILE });
+
+        var file = std.fs.cwd().createFile(state_path, .{}) catch |err| {
+            std.log.err("Error writing sync state to file: {}", .{err});
+            return;
+        };
+
+        try file.writeAll(buf.items);
     }
 
     // FIXME: Bad name, should reflect the periodical function of this function
@@ -129,6 +142,8 @@ pub const SyncManager = struct {
             const manifests = try std.json.parseFromSliceLeaky([]Manifest, arena.allocator(), body.items, .{});
             var databases_to_sync = std.ArrayList([]const u8).init(loop_alloc);
 
+            // FIXME: Logic is a bit unsound when it comes to databases being deleted server-side
+            // should be looked into
             for (manifests) |manifest| {
                 var found = false;
                 if (self.last_sync_manifests) |last_manifests| {
@@ -166,8 +181,12 @@ pub const SyncManager = struct {
                 const db_path = try std.mem.concat(loop_alloc, u8, &.{ aux_dbs, "/", hostname, daemon.DB_EXTENSION });
 
                 if (db_res.status == .gone) {
-                    std.log.info("Database removed from server, removing...");
-                    try std.fs.cwd().deleteFile(db_path);
+                    std.log.info("Database removed from server, removing...", .{});
+                    std.fs.cwd().deleteFile(db_path) catch |err| {
+                        if (err != error.FileNotFound) {
+                            std.log.err("Unexpected I/O error occurred: {}", .{err});
+                        }
+                    };
                 } else if (db_res.status != .ok) {
                     std.log.err("Error fetching aux database: {}", .{res.status});
                 } else {

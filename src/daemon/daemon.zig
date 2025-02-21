@@ -177,8 +177,8 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                         db.deinit();
                     }
                 },
-                .authenticate => |token| {
-                    try sync_manager.authenticate(token);
+                .authenticate => |state| {
+                    try sync_manager.authenticate(loop_alloc, state);
                     try msg.client.reply(ipc.IpcResponse{ .ok = .{} });
                 },
             }

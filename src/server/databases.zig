@@ -50,7 +50,7 @@ pub fn download(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
     const db_path = try std.mem.concat(res.arena, u8, &.{ DATA_DIR, username, "/", hostname, DB_EXTENSION });
 
     const file = std.fs.cwd().openFile(db_path, .{}) catch |err| {
-        if (err == .FileNotFound) {
+        if (err == error.FileNotFound) {
             res.status = 410;
             res.body = "Database does not exist on server";
         } else {

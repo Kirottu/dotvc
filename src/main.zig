@@ -42,26 +42,29 @@ pub fn main() !u8 {
     defer app.deinit();
 
     var cli = app.rootCommand();
+    cli.setProperty(.subcommand_required);
     try cli.addArg(yazap.Arg.singleValueOption("config", 'c', "Override config file location"));
     try cli.addArg(yazap.Arg.booleanOption("log-leaks", null, "Debugging option, log memory leaks on exit"));
 
-    var search = app.createCommand("search", "Interactively search for dotfiles");
-    try search.addArg(yazap.Arg.singleValueOption("database", 'd', "Specify which database to use, hostnames are used as database names"));
+    var search_cli = app.createCommand("search", "Interactively search for dotfiles");
+    try search_cli.addArg(yazap.Arg.singleValueOption("database", 'd', "Specify which database to use, hostnames are used as database names"));
 
-    const auth_cli = app.createCommand("auth", "Interactively authenticate to a DotVC sync server");
+    var sync_cli = app.createCommand("sync", "Manage DotVC Sync connection");
+    {
+        const auth_cli = app.createCommand("auth", "Login to a DotVC Sync server with an existing user");
+        const register_cli = app.createCommand("register", "Create a new user on a DotVC Sync server, and log in");
+        const purge_cli = app.createCommand("purge", "Delete all data related to the current system from the sync server");
+        const status_cli = app.createCommand("status", "View sync status");
 
-    const kill = app.createCommand("kill", "Gracefully shutdown the daemon");
-    var add = app.createCommand("add", "Add a path to the configuration");
-    try add.addArgs(&.{
-        yazap.Arg.positional("path", "The target path", null),
-        yazap.Arg.multiValuesOption("tags", 't', "Tags for all dotfiles in the target path", 10),
-        yazap.Arg.multiValuesOption("ignore", 'i', "Ignore patterns for path contents if target path is a directory", 10),
-    });
+        try sync_cli.addSubcommands(&.{ auth_cli, register_cli, purge_cli, status_cli });
+    }
+
+    const kill_cli = app.createCommand("kill", "Gracefully shutdown the daemon");
 
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommands(&[_]yazap.Command{ search, kill, daemon_cli, auth_cli });
+    try cli.addSubcommands(&[_]yazap.Command{ search_cli, kill_cli, daemon_cli, sync_cli });
 
     const matches = try app.parseProcess();
     const log_leaks = matches.containsArg("log-leaks");
