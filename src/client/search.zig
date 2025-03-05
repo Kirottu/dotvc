@@ -10,6 +10,7 @@ const root = @import("../main.zig");
 const TEMP_FILE_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
 const TEMP_FILE_DIR = "/tmp/dotvc";
 const BANNER_STR = "DotVC v0.1.0alpha ";
+const HELP_KEYBIND_STR = " Press '?' for help ";
 const TIME_FMT = "%Y-%m-%d %H:%M:%S";
 
 const Color = enum(u8) {
@@ -54,6 +55,7 @@ pub const SearchError = error{
 
 pub const State = struct {
     socket: std.posix.socket_t,
+    local_tz: zeit.TimeZone,
 
     tty: vaxis.tty.PosixTty,
     vx: vaxis.Vaxis,
@@ -63,8 +65,9 @@ pub const State = struct {
 
     ipc_dotfiles: root.ArenaAllocated([]const ipc.IpcDistilledDotfile),
     search_results: ?root.ArenaAllocated([]const SearchResult),
-    local_tz: zeit.TimeZone,
     prng: std.Random.DefaultPrng,
+
+    show_help: bool,
 
     selected_entry: usize,
     text_input: vaxis.widgets.TextInput,
@@ -105,6 +108,7 @@ pub const State = struct {
 
         const state = State{
             .socket = socket,
+            .local_tz = local_tz,
 
             .tty = tty,
             .vx = vx,
@@ -118,7 +122,9 @@ pub const State = struct {
             },
             .search_results = null,
             .selected_entry = 0,
-            .local_tz = local_tz,
+
+            .show_help = false,
+
             .prng = prng,
 
             .searcher = searcher,
@@ -159,25 +165,43 @@ pub const State = struct {
             const event = loop.nextEvent();
             switch (event) {
                 .key_press => |key| {
-                    if (key.matches('c', .{ .ctrl = true })) {
-                        break;
-                    } else if (key.matches('e', .{ .ctrl = true }) or key.matches(vaxis.Key.enter, .{})) {
-                        loop.stop();
-                        try self.openEditor(event_alloc);
-                        try loop.start();
-                    } else if (key.matches(vaxis.Key.down, .{})) {
-                        const max_index = (if (self.search_results) |results| results.value.len else self.ipc_dotfiles.value.len) - 1;
-                        if (self.selected_entry < max_index) {
-                            self.selected_entry += 1;
-                        }
-                    } else if (key.matches(vaxis.Key.up, .{})) {
-                        if (self.selected_entry > 0) {
-                            self.selected_entry -= 1;
-                        }
-                    } else {
-                        try self.text_input.update(.{ .key_press = key });
-                        try self.updateSearch(event_alloc);
-                        self.selected_entry = 0;
+                    key_sw: switch (key.codepoint) {
+                        vaxis.Key.escape => {
+                            if (self.show_help) {
+                                self.show_help = false;
+                            } else {
+                                break;
+                            }
+                        },
+                        vaxis.Key.enter => {
+                            loop.stop();
+                            try self.openEditor(event_alloc);
+                            try loop.start();
+                        },
+                        vaxis.Key.up => {
+                            if (self.selected_entry > 0) {
+                                self.selected_entry -= 1;
+                            }
+                        },
+                        vaxis.Key.down => {
+                            const max_index = (if (self.search_results) |results| results.value.len else self.ipc_dotfiles.value.len) - 1;
+                            if (self.selected_entry < max_index) {
+                                self.selected_entry += 1;
+                            }
+                        },
+                        else => {
+                            if (key.matches('c', .{ .ctrl = true })) {
+                                break;
+                            } else if (key.matches('e', .{ .ctrl = true })) {
+                                continue :key_sw vaxis.Key.enter;
+                            } else if (key.matches('?', .{ .shift = true })) {
+                                self.show_help = true;
+                            } else if (!key.isModifier() and !self.show_help) {
+                                try self.text_input.update(.{ .key_press = key });
+                                try self.updateSearch(event_alloc);
+                                self.selected_entry = 0;
+                            }
+                        },
                     }
                 },
                 .winsize => |ws| try self.vx.resize(self.allocator, self.tty.anyWriter(), ws),
@@ -212,7 +236,15 @@ pub const State = struct {
                     if (line > content.height - 1) {
                         break;
                     }
-                    self.drawResult(content, result.path, result.tags, result.date, @intCast(line));
+                    try self.drawResult(
+                        content,
+                        event_alloc,
+                        result.path,
+                        result.tags,
+                        result.date,
+                        result.match_indices,
+                        @intCast(line),
+                    );
                 }
             } else {
                 for (0.., self.ipc_dotfiles.value) |line, dotfile| {
@@ -227,7 +259,15 @@ pub const State = struct {
                     var time_str = std.ArrayList(u8).init(event_alloc);
                     try local.time().strftime(time_str.writer(), "%Y-%m-%d %H:%M:%S");
 
-                    self.drawResult(content, dotfile.path, tags_str, time_str.items, @intCast(line));
+                    try self.drawResult(
+                        content,
+                        event_alloc,
+                        dotfile.path,
+                        tags_str,
+                        time_str.items,
+                        null,
+                        @intCast(line),
+                    );
                 }
             }
 
@@ -253,6 +293,16 @@ pub const State = struct {
             }, .{
                 .row_offset = win.height - 2,
             });
+            _ = win.printSegment(.{
+                .text = HELP_KEYBIND_STR,
+                .style = .{
+                    .bold = true,
+                    .fg = .{ .index = @intFromEnum(Color.green) },
+                },
+            }, .{
+                .col_offset = BANNER_STR.len + 2,
+                .row_offset = win.height - 2,
+            });
 
             _ = win.printSegment(
                 .{
@@ -266,19 +316,47 @@ pub const State = struct {
                 },
             );
 
+            if (self.show_help) {
+                const help_centered = vaxis.widgets.alignment.center(win, win.width - 60, win.height - 20);
+                const help_child = help_centered.child(.{
+                    .border = .{ .where = .all },
+                });
+                help_child.clear();
+
+                const help_banner = "Keybinds";
+
+                // TODO: Help view
+
+                _ = help_child.printSegment(
+                    .{ .text = help_banner, .style = .{ .bold = true } },
+                    .{ .row_offset = 1, .col_offset = (help_child.width - @as(u16, @intCast(help_banner.len))) / 2 },
+                );
+            }
+
             try self.vx.render(self.tty.anyWriter());
         }
     }
 
-    fn drawResult(self: *State, win: vaxis.Window, path: []const u8, tags: []const u8, time: []const u8, line: u16) void {
+    fn drawResult(
+        self: *State,
+        win: vaxis.Window,
+        arena_alloc: std.mem.Allocator,
+        path: []const u8,
+        tags: []const u8,
+        time: []const u8,
+        indices: ?[]const usize,
+        line: u16,
+    ) !void {
         const time_offset: u16 = @intCast(win.width - time.len - 1);
         const tags_offset: u16 = @intCast(time_offset - tags.len - 2);
 
+        // FIXME: This is all very repetitive
+
         _ = win.printSegment(.{
             .text = path,
-            .style = .{ .reverse = line == self.selected_entry },
+            .style = .{ .reverse = line == self.selected_entry, .dim = true },
         }, .{
-            .row_offset = @intCast(line),
+            .row_offset = line,
             .col_offset = 1,
         });
         _ = win.printSegment(.{
@@ -287,7 +365,7 @@ pub const State = struct {
                 .fg = .{ .index = @intFromEnum(Color.yellow) },
             },
         }, .{
-            .row_offset = @intCast(line),
+            .row_offset = line,
             .col_offset = tags_offset,
         });
         _ = win.printSegment(.{
@@ -296,9 +374,28 @@ pub const State = struct {
                 .fg = .{ .index = @intFromEnum(Color.green) },
             },
         }, .{
-            .row_offset = @intCast(line),
+            .row_offset = line,
             .col_offset = time_offset,
         });
+
+        if (indices) |_indices| {
+            const combined = try std.mem.concat(arena_alloc, u8, &.{ path, tags, time });
+
+            for (_indices) |i| {
+                var offset: usize = 0;
+                if (i < path.len) {
+                    offset = 1 + i;
+                } else if (i < path.len + tags.len) {
+                    offset = tags_offset + i - path.len;
+                } else {
+                    offset = time_offset + i - path.len - tags.len;
+                }
+                _ = win.printSegment(
+                    .{ .text = combined[i .. i + 1], .style = .{ .bold = true } },
+                    .{ .row_offset = line, .col_offset = @intCast(offset) },
+                );
+            }
+        }
     }
 
     fn updateSearch(self: *State, event_alloc: std.mem.Allocator) !void {
@@ -338,12 +435,14 @@ pub const State = struct {
             const haystack = try std.mem.concat(event_alloc, u8, &.{ dotfile.path, tags_str, time_str.items });
 
             const matches = self.searcher.scoreMatches(haystack, needle);
+            const indices = try arena_alloc.alloc(usize, matches.matches.len);
+            @memcpy(indices, matches.matches);
 
             temp_results[i] = .{ .result = SearchResult{
                 .path = dotfile.path,
                 .tags = tags_str,
                 .date = time_str.items,
-                .match_indices = matches.matches,
+                .match_indices = indices,
                 .rowid = dotfile.rowid,
             }, .score = matches.score orelse -(std.math.maxInt(i32) - 1) };
         }
@@ -410,6 +509,10 @@ pub const State = struct {
 
         var file = try std.fs.createFileAbsolute(path, .{});
         try file.writeAll(dotfile.content);
+
+        var permissions = (try file.metadata()).permissions();
+        permissions.setReadOnly(true);
+        try file.setPermissions(permissions);
 
         self.vx.window().clear();
         try self.vx.render(self.tty.anyWriter());

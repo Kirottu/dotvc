@@ -13,9 +13,68 @@ const Config = struct {
     port: u16,
 };
 
+/// All prepared MySQL statements in a single place
+const PreparedStatements = struct {
+    sel_manifests: myzql.result.PreparedStatement,
+    sel_user: myzql.result.PreparedStatement,
+    upd_token: myzql.result.PreparedStatement,
+    sel_pass: myzql.result.PreparedStatement,
+    ins_token: myzql.result.PreparedStatement,
+    ins_user: myzql.result.PreparedStatement,
+    ins_or_upd_manifest: myzql.result.PreparedStatement,
+    del_manifest: myzql.result.PreparedStatement,
+
+    fn init(c: *myzql.conn.Conn, allocator: std.mem.Allocator) !PreparedStatements {
+        const sel_manifests = try (try c.prepare(
+            allocator,
+            "SELECT name, UNIX_TIMESTAMP(modified) FROM db_manifests WHERE username = ?",
+        )).expect(.stmt);
+        const sel_user = try (try c.prepare(
+            allocator,
+            "SELECT username FROM auth_tokens WHERE token = ?",
+        )).expect(.stmt);
+        const upd_token = try (try c.prepare(
+            allocator,
+            "UPDATE auth_tokens SET last_used = NOW() WHERE token = ?",
+        )).expect(.stmt);
+        const sel_pass = try (try c.prepare(
+            allocator,
+            "SELECT pass_hash FROM users WHERE username = ?",
+        )).expect(.stmt);
+        const ins_token = try (try c.prepare(
+            allocator,
+            "INSERT INTO auth_tokens VALUES (?, ?, NOW())",
+        )).expect(.stmt);
+        const ins_user = try (try c.prepare(
+            allocator,
+            "INSERT INTO users (username, pass_hash) VALUES (?, ?)",
+        )).expect(.stmt);
+        const ins_or_upd_manifest = try (try c.prepare(
+            allocator,
+            "INSERT INTO db_manifests VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE modified = NOW()",
+        )).expect(.stmt);
+        const del_manifest = try (try c.prepare(
+            allocator,
+            "DELETE FROM db_manifests WHERE username = ? AND name = ?",
+        )).expect(.stmt);
+
+        return PreparedStatements{
+            .sel_manifests = sel_manifests,
+            .sel_user = sel_user,
+            .upd_token = upd_token,
+            .sel_pass = sel_pass,
+            .ins_token = ins_token,
+            .ins_user = ins_user,
+            .ins_or_upd_manifest = ins_or_upd_manifest,
+            .del_manifest = del_manifest,
+        };
+    }
+};
+
 pub const App = struct {
     db_conn: myzql.conn.Conn,
     config: Config,
+    stmts: PreparedStatements,
 
     pub fn deinit(self: *App) void {
         self.db_conn.deinit();
@@ -81,7 +140,8 @@ pub fn main() !void {
     if (matches.containsArg("cron")) {
         try cron.cron(allocator, &db_conn);
     } else {
-        var app = try App{
+        var app = App{
+            .stmts = try PreparedStatements.init(&db_conn, allocator),
             .db_conn = db_conn,
             .config = result.value,
         };

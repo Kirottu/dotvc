@@ -26,7 +26,7 @@ pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches
 
     if (matches.subcommandMatches("login")) |_| {
         try login(arena_alloc, socket);
-    } else if (matches.subcommandMatches("logout")) {
+    } else if (matches.subcommandMatches("logout")) |_| {
         try logout(arena_alloc, socket);
     } else if (matches.subcommandMatches("register")) |_| {
         try register(arena_alloc, socket);
@@ -323,7 +323,7 @@ fn authenticate(
         std.process.exit(1);
     }
 
-    _ = try client.ipcMessage(allocator, socket, .{ .authenticate = sync.SyncState{
+    _ = try client.ipcMessage(allocator, socket, .{ .sync_login = sync.SyncState{
         .token = body.items,
         .db_name = db_name,
         .username = username,

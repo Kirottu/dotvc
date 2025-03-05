@@ -59,9 +59,7 @@ pub fn createToken(app: *root.App, req: *httpz.Request, res: *httpz.Response) !v
     };
 
     const rec = blk: {
-        const stmt = try (try app.db_conn.prepare(res.arena, "SELECT pass_hash FROM users WHERE username = ?")).expect(.stmt);
-
-        const db_res = try app.db_conn.executeRows(&stmt, .{username});
+        const db_res = try app.db_conn.executeRows(&app.stmts.sel_pass, .{username});
         const rows = try db_res.expect(.rows);
         const row = try rows.first() orelse {
             res.status = 401;
@@ -97,8 +95,7 @@ pub fn createToken(app: *root.App, req: *httpz.Request, res: *httpz.Response) !v
         new_token[i] = TOKEN_CHARS[index];
     }
 
-    const stmt = try (try app.db_conn.prepare(res.arena, "INSERT INTO auth_tokens VALUES (?, ?, NOW())")).expect(.stmt);
-    const db_res = try app.db_conn.execute(&stmt, .{ new_token, username });
+    const db_res = try app.db_conn.execute(&app.stmts.ins_token, .{ new_token, username });
     _ = try db_res.expect(.ok);
 
     res.body = new_token;
@@ -143,12 +140,7 @@ pub fn register(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
         .params = argon2.Params.owasp_2id,
     }, &buf);
 
-    const stmt = try (try app.db_conn.prepare(
-        res.arena,
-        "INSERT INTO users (username, pass_hash) VALUES (?, ?)",
-    )).expect(.stmt);
-
-    const db_res = try app.db_conn.execute(&stmt, .{ username, out });
+    const db_res = try app.db_conn.execute(&app.stmts.ins_user, .{ username, out });
     if (db_res == .err) {
         // 1062: Duplicate entry for key, aka user already exists
         if (db_res.err.error_code == 1062) {
@@ -180,12 +172,7 @@ pub fn authenticate(app: *root.App, req: *httpz.Request, res: *httpz.Response, m
     };
 
     const rec = blk: {
-        const stmt = try (try app.db_conn.prepare(
-            res.arena,
-            "SELECT username FROM auth_tokens WHERE token = ?",
-        )).expect(.stmt);
-
-        const rows = try app.db_conn.executeRows(&stmt, .{token});
+        const rows = try app.db_conn.executeRows(&app.stmts.sel_user, .{token});
         const row = try rows.rows.first() orelse {
             res.status = 401;
             res.body = "Invalid token";
@@ -200,12 +187,7 @@ pub fn authenticate(app: *root.App, req: *httpz.Request, res: *httpz.Response, m
         break :blk rec;
     };
 
-    const stmt = try (try app.db_conn.prepare(
-        res.arena,
-        "UPDATE auth_tokens SET last_used = NOW() WHERE token = ?",
-    )).expect(.stmt);
-
-    const db_res = try app.db_conn.execute(&stmt, .{token});
+    const db_res = try app.db_conn.execute(&app.stmts.upd_token, .{token});
     _ = try db_res.expect(.ok);
 
     return rec.username;
