@@ -13,6 +13,30 @@ const BANNER_STR = "DotVC v0.1.0alpha ";
 const HELP_KEYBIND_STR = " Press '?' for help ";
 const TIME_FMT = "%Y-%m-%d %H:%M:%S";
 
+const KeybindHelp = struct {
+    keybind: []const u8,
+    help: []const u8,
+};
+
+const KEYBINDS_HELP = [_]KeybindHelp{
+    .{
+        .keybind = "Ctrl-C",
+        .help = "Exit the program",
+    },
+    .{
+        .keybind = "Esc",
+        .help = "Close help menu if open, exit program otherwise",
+    },
+    .{
+        .keybind = "Enter, Ctrl-E",
+        .help = "Open editor to currently selected file",
+    },
+    .{
+        .keybind = "?",
+        .help = "Open help menu",
+    },
+};
+
 const Color = enum(u8) {
     black = 0,
     red = 1,
@@ -323,14 +347,27 @@ pub const State = struct {
                 });
                 help_child.clear();
 
-                const help_banner = "Keybinds";
+                const keybind_help_child = help_child.child(.{
+                    .x_off = 18,
+                });
 
-                // TODO: Help view
+                const help_banner = "Keybinds";
 
                 _ = help_child.printSegment(
                     .{ .text = help_banner, .style = .{ .bold = true } },
                     .{ .row_offset = 1, .col_offset = (help_child.width - @as(u16, @intCast(help_banner.len))) / 2 },
                 );
+
+                for (1.., KEYBINDS_HELP) |i, keybind| {
+                    _ = help_child.printSegment(
+                        .{ .text = keybind.keybind, .style = .{ .bold = true } },
+                        .{ .row_offset = @intCast(i * 3 + 1), .col_offset = 3 },
+                    );
+                    _ = keybind_help_child.printSegment(
+                        .{ .text = keybind.help, .style = .{} },
+                        .{ .row_offset = @intCast(i * 3 + 1) },
+                    );
+                }
             }
 
             try self.vx.render(self.tty.anyWriter());
@@ -354,7 +391,9 @@ pub const State = struct {
 
         _ = win.printSegment(.{
             .text = path,
-            .style = .{ .reverse = line == self.selected_entry, .dim = true },
+            .style = .{
+                .reverse = line == self.selected_entry,
+            },
         }, .{
             .row_offset = line,
             .col_offset = 1,

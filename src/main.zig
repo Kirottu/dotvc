@@ -50,6 +50,7 @@ pub fn main() !u8 {
     try search_cli.addArg(yazap.Arg.singleValueOption("database", 'd', "Specify which database to use, hostnames are used as database names"));
 
     var sync_cli = app.createCommand("sync", "Manage DotVC Sync connection");
+    const index_cli = app.createCommand("index", "Create new revisions for all watch paths in the database");
     sync_cli.setProperty(.subcommand_required);
     {
         const login_cli = app.createCommand("login", "Login to a DotVC Sync server with an existing user");
@@ -67,9 +68,11 @@ pub fn main() !u8 {
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommands(&[_]yazap.Command{ search_cli, kill_cli, daemon_cli, sync_cli });
+    try cli.addSubcommands(&.{ search_cli, kill_cli, daemon_cli, sync_cli, index_cli });
 
-    const matches = try app.parseProcess();
+    const matches = app.parseProcess() catch {
+        return 1;
+    };
     const log_leaks = matches.containsArg("log-leaks");
     const config_path = if (matches.getSingleValue("config")) |path| path else dir: {
         const config_dir_postfix = "/dotvc/config.toml";

@@ -6,6 +6,13 @@ const ipc = @import("../daemon/ipc.zig");
 const search = @import("search.zig");
 const sync = @import("sync.zig");
 
+pub const ANSI_BOLD = "\x1B[1m";
+pub const ANSI_UL = "\x1B[4m";
+pub const ANSI_RESET = "\x1B[0m";
+
+pub const ANSI_GREEN = "\x1B[32m";
+pub const ANSI_RED = "\x1B[31m";
+
 pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg: ipc.IpcMsg) !root.ArenaAllocated(ipc.IpcResponse) {
     var arena = std.heap.ArenaAllocator.init(allocator);
     const arena_alloc = arena.allocator();
@@ -47,7 +54,15 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
 
     const socket = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
     const addr = try std.net.Address.initUnix(ipc.SOCKET_PATH);
-    try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
+    std.posix.connect(socket, &addr.any, addr.getOsSockLen()) catch |err| {
+        const stdout = std.io.getStdOut().writer();
+
+        try stdout.print(
+            "{s}{s}Failed to connect to daemon!{s}: {}\n\nIs the daemon running?\n",
+            .{ ANSI_RED, ANSI_BOLD, ANSI_RESET, err },
+        );
+        return;
+    };
 
     if (matches.subcommandMatches("search")) |search_matches| {
         var state = search.State.init(allocator, socket, config, search_matches.getSingleValue("database")) catch |err| {
@@ -64,5 +79,5 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
         res.deinit();
     } else if (matches.subcommandMatches("sync")) |sync_cli| {
         try sync.syncCli(allocator, socket, sync_cli);
-    }
+    } else if (matches.subcommandMatches("index")) |_| {}
 }

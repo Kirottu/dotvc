@@ -8,13 +8,6 @@ const server_auth = @import("../server/auth.zig");
 
 const termios_c = @cImport(@cInclude("termios.h"));
 
-const ANSI_BOLD = "\x1B[1m";
-const ANSI_UL = "\x1B[4m";
-const ANSI_RESET = "\x1B[0m";
-
-const ANSI_GREEN = "\x1B[32m";
-const ANSI_RED = "\x1B[31m";
-
 const PURGE_CHALLENGE = "Yes, do as I say!";
 
 pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches: yazap.ArgMatches) !void {
@@ -45,11 +38,11 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
-        .{ ANSI_BOLD, ANSI_RESET, ANSI_UL },
+        .{ client.ANSI_BOLD, client.ANSI_RESET, client.ANSI_UL },
     );
 
     if (!std.mem.startsWith(u8, host, "http")) {
-        try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_RESET });
+        try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ client.ANSI_RESET, client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET });
         return;
     }
 
@@ -57,13 +50,13 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         "{s}{s}Username: {s}",
-        .{ ANSI_RESET, ANSI_BOLD, ANSI_RESET },
+        .{ client.ANSI_RESET, client.ANSI_BOLD, client.ANSI_RESET },
     );
     const password = try prompt(
         allocator,
         true,
         "{s}Password: {s}",
-        .{ ANSI_BOLD, ANSI_RESET },
+        .{ client.ANSI_BOLD, client.ANSI_RESET },
     );
 
     var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
@@ -73,13 +66,13 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         "{s}Machine name{s} (leave empty for \"{s}\"): ",
-        .{ ANSI_BOLD, ANSI_RESET, hostname },
+        .{ client.ANSI_BOLD, client.ANSI_RESET, hostname },
     );
     const db_name = if (db_name_input.len == 0) hostname else db_name_input;
 
     try authenticate(allocator, socket, host, username, password, db_name);
 
-    try stdout.print("{s}{s}Successfully authenticated to host!{s}\n", .{ ANSI_BOLD, ANSI_GREEN, ANSI_RESET });
+    try stdout.print("{s}{s}Successfully authenticated to host!{s}\n", .{ client.ANSI_BOLD, client.ANSI_GREEN, client.ANSI_RESET });
 }
 
 fn logout(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
@@ -92,7 +85,7 @@ fn logout(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         \\
         \\{s}Are you sure?{s} [y/N]:
     ,
-        .{ ANSI_BOLD, ANSI_RESET },
+        .{ client.ANSI_BOLD, client.ANSI_RESET },
     );
     if (std.mem.eql(u8, answer, "y") or std.mem.eql(u8, answer, "Y")) {
         _ = try client.ipcMessage(allocator, socket, .{ .sync_logout = .{} });
@@ -108,11 +101,11 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
-        .{ ANSI_BOLD, ANSI_RESET, ANSI_UL },
+        .{ client.ANSI_BOLD, client.ANSI_RESET, client.ANSI_UL },
     );
 
     if (!std.mem.startsWith(u8, host, "http")) {
-        try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_RESET });
+        try stdout.print("{s}{s}{s}Invalid URI schema, only http(s) is supported.{s}\n", .{ client.ANSI_RESET, client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET });
         return;
     }
 
@@ -120,25 +113,25 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         "{s}{s}Username{s} (at least {} characters): ",
-        .{ ANSI_RESET, ANSI_BOLD, ANSI_RESET, server_auth.MIN_USERNAME_LEN },
+        .{ client.ANSI_RESET, client.ANSI_BOLD, client.ANSI_RESET, server_auth.MIN_USERNAME_LEN },
     );
     const p1 = try prompt(
         allocator,
         true,
         "{s}Password{s} (at least {} characters): ",
-        .{ ANSI_BOLD, ANSI_RESET, server_auth.MIN_PASSWORD_LEN },
+        .{ client.ANSI_BOLD, client.ANSI_RESET, server_auth.MIN_PASSWORD_LEN },
     );
     const p2 = try prompt(
         allocator,
         true,
         "{s}Repeat password{s}: ",
-        .{ ANSI_BOLD, ANSI_RESET },
+        .{ client.ANSI_BOLD, client.ANSI_RESET },
     );
 
     if (!std.mem.eql(u8, p1, p2)) {
         try stdout.print(
             "{s}{s}Passwords do not match.{s}",
-            .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+            .{ client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET },
         );
         return;
     }
@@ -150,7 +143,7 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         allocator,
         false,
         "{s}Machine name{s} (leave empty for \"{s}\"): ",
-        .{ ANSI_BOLD, ANSI_RESET, hostname },
+        .{ client.ANSI_BOLD, client.ANSI_RESET, hostname },
     );
     const db_name = if (db_name_input.len == 0) hostname else db_name_input;
     const url = try std.mem.concat(
@@ -171,7 +164,7 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     if (res.status != .ok) {
         try stdout.print(
             "{s}{s}{}{s}, {s}",
-            .{ ANSI_RED, ANSI_BOLD, res.status, ANSI_RESET, body.items },
+            .{ client.ANSI_RED, client.ANSI_BOLD, res.status, client.ANSI_RESET, body.items },
         );
         return;
     }
@@ -180,7 +173,7 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
 
     try stdout.print(
         "{s}{s}Successfully registered & logged into the host!{s}\n",
-        .{ ANSI_BOLD, ANSI_GREEN, ANSI_RESET },
+        .{ client.ANSI_BOLD, client.ANSI_GREEN, client.ANSI_RESET },
     );
 }
 
@@ -201,13 +194,13 @@ fn purge(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         \\To proceed, type {s}{s}{s}: 
         \\
     ,
-        .{ ANSI_RED, ANSI_BOLD, ANSI_RESET, ANSI_BOLD, PURGE_CHALLENGE, ANSI_RESET },
+        .{ client.ANSI_RED, client.ANSI_BOLD, client.ANSI_RESET, client.ANSI_BOLD, PURGE_CHALLENGE, client.ANSI_RESET },
     );
 
     if (!std.mem.eql(u8, input, PURGE_CHALLENGE)) {
         try std.io.getStdOut().writer().print(
             "{s}{s}Input does not match challenge.{s}\n",
-            .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+            .{ client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET },
         );
         return;
     }
@@ -237,7 +230,7 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
                 \\Login to a DotVC Sync server with `dotvc sync login`
                 \\
             ,
-                .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+                .{ client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET },
             );
         },
         .synced => |synced| {
@@ -249,15 +242,15 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
                 \\
             ,
                 .{
-                    ANSI_BOLD,
+                    client.ANSI_BOLD,
                     synced.username,
-                    ANSI_RESET,
-                    ANSI_UL,
+                    client.ANSI_RESET,
+                    client.ANSI_UL,
                     synced.host,
-                    ANSI_RESET,
-                    ANSI_BOLD,
+                    client.ANSI_RESET,
+                    client.ANSI_BOLD,
                     sync_time.items,
-                    ANSI_RESET,
+                    client.ANSI_RESET,
                 },
             );
 
@@ -269,7 +262,7 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
                     const postfix = if (std.mem.eql(u8, synced.db_name, manifest.name)) " [this machine]" else "";
                     try stdout.print(
                         "  {s}{s}{s}{s}{s}: {s}\n",
-                        .{ ANSI_BOLD, ANSI_GREEN, manifest.name, ANSI_RESET, postfix, time_str.items },
+                        .{ client.ANSI_BOLD, client.ANSI_GREEN, manifest.name, client.ANSI_RESET, postfix, time_str.items },
                     );
                 }
             } else {
@@ -280,7 +273,7 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
                     \\or initiate sync now with `dotvc sync now`.
                     \\
                 ,
-                    .{ ANSI_BOLD, ANSI_RED, ANSI_RESET },
+                    .{ client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET },
                 );
             }
         },
@@ -318,7 +311,7 @@ fn authenticate(
     if (res.status != .ok) {
         try std.io.getStdOut().writer().print(
             "{s}{s}{}{s}, {s}",
-            .{ ANSI_RED, ANSI_BOLD, res.status, ANSI_RESET, body.items },
+            .{ client.ANSI_RED, client.ANSI_BOLD, res.status, client.ANSI_RESET, body.items },
         );
         std.process.exit(1);
     }
@@ -357,7 +350,7 @@ fn prompt(allocator: std.mem.Allocator, hide_input: bool, comptime fmt: []const 
     }
 
     const out = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
-        try stdout.print("{s}Invalid input{s}\n", .{ ANSI_RED, ANSI_RESET });
+        try stdout.print("{s}Invalid input{s}\n", .{ client.ANSI_RED, client.ANSI_RESET });
         std.process.exit(1);
     };
 

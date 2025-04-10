@@ -84,7 +84,6 @@ pub const Database = struct {
     }
 
     pub fn addDotfile(self: *Database, dotfile: Dotfile) !void {
-        // TODO: Maybe cache statements?
         var insert_dotfile = try self.db.prepare(
             \\INSERT INTO dotfiles(path, content, date) VALUES(?, ?, ?);
         );
