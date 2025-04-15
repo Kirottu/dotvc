@@ -1,6 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const myzql = @import("myzql");
+const Regex = @import("zregex");
 
 const root = @import("main.zig");
 const auth = @import("auth.zig");
@@ -8,7 +9,8 @@ const auth = @import("auth.zig");
 const DATA_DIR = "databases/";
 const DB_EXTENSION = ".sqlite3";
 /// Characters forbidden from DB names, to prevent arbitrary filesystem access
-const FORBIDDEN_CHARS = "/.";
+/// Allows alphanumeric characters, underscores and dashes. Also sets the minimum length for the hostnames
+const DB_NAME_REGEX = "^(\\w|-){5,}$";
 
 pub fn manifest(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     const username = try auth.authenticate(app, req, res, .header) orelse {
@@ -44,7 +46,7 @@ pub fn download(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void
         res.body = "Missing database name";
         return;
     };
-    if (!checkName(db_name, res)) {
+    if (!try checkNameRes(db_name, res)) {
         return;
     }
 
@@ -77,7 +79,7 @@ pub fn upload(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
         res.body = "Missing database name";
         return;
     };
-    if (!checkName(db_name, res)) {
+    if (!try checkNameRes(db_name, res)) {
         return;
     }
 
@@ -112,7 +114,7 @@ pub fn delete(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
         res.body = "Missing database name";
         return;
     };
-    if (!checkName(db_name, res)) {
+    if (!try checkNameRes(db_name, res)) {
         return;
     }
 
@@ -123,14 +125,29 @@ pub fn delete(app: *root.App, req: *httpz.Request, res: *httpz.Response) !void {
     std.fs.cwd().deleteFile(db_path) catch {};
 }
 
-fn checkName(name: []const u8, res: *httpz.Response) bool {
-    for (FORBIDDEN_CHARS) |chr| {
-        if (std.mem.containsAtLeast(u8, name, 1, &.{chr})) {
-            res.status = 400;
-            res.body = "Invalid characters in database name";
-            return false;
-        }
+pub fn checkNameRes(name: []const u8, res: *httpz.Response) !bool {
+    const name_sentinel = try res.arena.dupeZ(u8, name);
+    if (!try checkName(name_sentinel)) {
+        res.status = 400;
+        res.body = "Invalid characters in database name";
+        return false;
     }
 
     return true;
+}
+
+pub fn checkName(name: [:0]const u8) !bool {
+    const r = try Regex.init(DB_NAME_REGEX, .{ .extended = true });
+    defer r.deinit();
+
+    return r.match(name, .{});
+}
+
+test "checkName regex" {
+    const expect = std.testing.expect;
+
+    try expect(try checkName("harold"));
+    try expect(!try checkName("ee"));
+    try expect(try checkName("12346-_AAAAeEee"));
+    try expect(!try checkName("äääää"));
 }

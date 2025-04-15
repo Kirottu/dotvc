@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const zig_toml = b.dependency("zig-toml", .{}).module("zig-toml");
+    const zig_toml = b.dependency("toml", .{}).module("zig-toml");
     const yazap = b.dependency("yazap", .{}).module("yazap");
     const sqlite = b.dependency("sqlite", .{}).module("sqlite");
     const vaxis = b.dependency("vaxis", .{}).module("vaxis");
@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
     const zeit = b.dependency("zeit", .{}).module("zeit");
     const httpz = b.dependency("httpz", .{}).module("httpz");
     const myzql = b.dependency("myzql", .{}).module("myzql");
+    const zregex = b.dependency("zregex", .{}).module("zregex");
 
     exe.root_module.addImport("zig-toml", zig_toml);
     exe.root_module.addImport("yazap", yazap);
@@ -37,6 +38,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("vaxis", vaxis);
     exe.root_module.addImport("fuzzig", fuzzig);
     exe.root_module.addImport("zeit", zeit);
+    exe.root_module.addImport("zregex", zregex);
 
     const server_exe = b.addExecutable(.{
         .name = "dotvc-server",
@@ -49,6 +51,7 @@ pub fn build(b: *std.Build) void {
     server_exe.root_module.addImport("myzql", myzql);
     server_exe.root_module.addImport("yazap", yazap);
     server_exe.root_module.addImport("zig-toml", zig_toml);
+    server_exe.root_module.addImport("zregex", zregex);
 
     const client_step = b.step("client", "Build client");
     const server_step = b.step("server", "Build server");
@@ -97,12 +100,29 @@ pub fn build(b: *std.Build) void {
     client_unit_tests.root_module.addImport("zig-toml", zig_toml);
     client_unit_tests.root_module.addImport("yazap", yazap);
     client_unit_tests.root_module.addImport("sqlite", sqlite);
+    client_unit_tests.root_module.addImport("zeit", zeit);
+    client_unit_tests.root_module.addImport("vaxis", vaxis);
+    client_unit_tests.root_module.addImport("fuzzig", fuzzig);
+
+    const server_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/server/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    server_unit_tests.root_module.addImport("zig-toml", zig_toml);
+    server_unit_tests.root_module.addImport("yazap", yazap);
+    server_unit_tests.root_module.addImport("myzql", myzql);
+    server_unit_tests.root_module.addImport("httpz", httpz);
+    server_unit_tests.root_module.addImport("zregex", zregex);
 
     const run_exe_unit_tests = b.addRunArtifact(client_unit_tests);
+    const run_server_unit_tests = b.addRunArtifact(server_unit_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_server_unit_tests.step);
 }

@@ -223,7 +223,6 @@ pub const State = struct {
                             } else if (!key.isModifier() and !self.show_help) {
                                 try self.text_input.update(.{ .key_press = key });
                                 try self.updateSearch(event_alloc);
-                                self.selected_entry = 0;
                             }
                         },
                     }
@@ -244,6 +243,10 @@ pub const State = struct {
                 .text = "Tags",
                 .style = .{ .dim = true },
             }, .{ .col_offset = @intCast(header.width - TIME_FMT.len - 9) });
+            _ = header.printSegment(.{
+                .text = "Date",
+                .style = .{ .dim = true },
+            }, .{ .col_offset = @intCast(header.width - 14) });
             _ = header.printSegment(.{
                 .text = "Time",
                 .style = .{ .dim = true },
@@ -430,7 +433,11 @@ pub const State = struct {
                     offset = time_offset + i - path.len - tags.len;
                 }
                 _ = win.printSegment(
-                    .{ .text = combined[i .. i + 1], .style = .{ .bold = true } },
+                    .{ .text = combined[i .. i + 1], .style = .{
+                        .bold = true,
+                        .fg = .{ .index = @intFromEnum(Color.bright_red) },
+                        .reverse = line == self.selected_entry,
+                    } },
                     .{ .row_offset = line, .col_offset = @intCast(offset) },
                 );
             }
@@ -443,7 +450,7 @@ pub const State = struct {
             self.search_results = null;
         }
 
-        const needle = self.text_input.buf.firstHalf();
+        const needle = self.text_input.buf.buffer[0..self.text_input.buf.realLength()];
 
         if (needle.len == 0) {
             return;
@@ -513,6 +520,10 @@ pub const State = struct {
                 .arena = arena,
                 .value = search_results,
             };
+        }
+
+        if (search_results.len > 0 and search_results.len - 1 < self.selected_entry) {
+            self.selected_entry = search_results.len - 1;
         }
     }
 

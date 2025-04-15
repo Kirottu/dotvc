@@ -1,7 +1,7 @@
 const std = @import("std");
 const myzql = @import("myzql");
 
-const TOKEN_AGE = 604800; // A week, FIXME: A proper time should be determined/should be configurable
+const TOKEN_AGE = 2419200; // A month
 
 /// Job that needs to be ran regularly to clean up expired auth tokens
 pub fn cron(allocator: std.mem.Allocator, db_conn: *myzql.conn.Conn) !void {

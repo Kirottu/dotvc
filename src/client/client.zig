@@ -13,6 +13,35 @@ pub const ANSI_RESET = "\x1B[0m";
 pub const ANSI_GREEN = "\x1B[32m";
 pub const ANSI_RED = "\x1B[31m";
 
+pub fn prompt(allocator: std.mem.Allocator, hide_input: bool, comptime fmt: []const u8, args: anytype) ![]u8 {
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+
+    try stdout.print(fmt, args);
+
+    const termios = try std.posix.tcgetattr(std.posix.STDOUT_FILENO);
+    if (hide_input) {
+        var t = termios;
+
+        // Disable echoing to hide password as it is being typed
+        t.lflag.ECHO = false;
+
+        try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, t);
+    }
+
+    const out = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
+        try stdout.print("{s}Invalid input{s}\n", .{ ANSI_RED, ANSI_RESET });
+        std.process.exit(1);
+    };
+
+    if (hide_input) {
+        try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, termios);
+        try stdout.print("\n", .{});
+    }
+
+    return out;
+}
+
 pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg: ipc.IpcMsg) !root.ArenaAllocated(ipc.IpcResponse) {
     var arena = std.heap.ArenaAllocator.init(allocator);
     const arena_alloc = arena.allocator();
@@ -79,5 +108,12 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
         res.deinit();
     } else if (matches.subcommandMatches("sync")) |sync_cli| {
         try sync.syncCli(allocator, socket, sync_cli);
-    } else if (matches.subcommandMatches("index")) |_| {}
+    } else if (matches.subcommandMatches("index")) |_| {
+        const res = try prompt(allocator, false, "This will create a new database entry for each configured config file, are you sure? [y/N]: ", .{});
+        defer allocator.free(res);
+
+        if (res.len == 1 and (res[0] == 'y' or res[0] == 'Y')) {
+            _ = try ipcMessage(allocator, socket, .{ .index_all = .{} });
+        }
+    }
 }

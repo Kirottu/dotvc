@@ -92,7 +92,7 @@ pub const Inotify = struct {
     }
 
     pub fn addWatcher(self: *Inotify, path: []const u8) !u64 {
-        const file = try std.fs.cwd().openFile(path, .{});
+        const file = try std.fs.openFileAbsolute(path, .{});
         defer file.close();
         const metadata = try file.metadata();
         self.watcher_id += 1;

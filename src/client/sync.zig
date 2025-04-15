@@ -1,10 +1,12 @@
 const std = @import("std");
 const yazap = @import("yazap");
 const zeit = @import("zeit");
+const tiny_regex = @cImport(@cInclude("tiny-regex/re.h"));
 
 const client = @import("client.zig");
 const sync = @import("../daemon/sync.zig");
 const server_auth = @import("../server/auth.zig");
+const server_db = @import("../server/databases.zig");
 
 const termios_c = @cImport(@cInclude("termios.h"));
 
@@ -34,7 +36,7 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     const stdout = std.io.getStdOut().writer();
 
     // FIXME: Underline here has some weird behavior
-    const host = try prompt(
+    const host = try client.prompt(
         allocator,
         false,
         "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
@@ -46,13 +48,13 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         return;
     }
 
-    const username = try prompt(
+    const username = try client.prompt(
         allocator,
         false,
         "{s}{s}Username: {s}",
         .{ client.ANSI_RESET, client.ANSI_BOLD, client.ANSI_RESET },
     );
-    const password = try prompt(
+    const password = try client.prompt(
         allocator,
         true,
         "{s}Password: {s}",
@@ -62,13 +64,22 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
     const hostname = try std.posix.gethostname(&hostname_buf);
 
-    const db_name_input = try prompt(
+    const db_name_input = try client.prompt(
         allocator,
         false,
         "{s}Machine name{s} (leave empty for \"{s}\"): ",
         .{ client.ANSI_BOLD, client.ANSI_RESET, hostname },
     );
     const db_name = if (db_name_input.len == 0) hostname else db_name_input;
+    const db_name_sentinel = try allocator.dupeZ(u8, db_name);
+
+    if (!try server_db.checkName(db_name_sentinel)) {
+        try stdout.print(
+            "{s}{s}Name has invalid characters or is too short!{s}\nOnly characters a-z, A-Z, 0-9, - and _ are allowed. Has to be at least 5 characters long.\n",
+            .{ client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET },
+        );
+        return;
+    }
 
     try authenticate(allocator, socket, host, username, password, db_name);
 
@@ -76,7 +87,7 @@ fn login(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
 }
 
 fn logout(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
-    const answer = try prompt(
+    const answer = try client.prompt(
         allocator,
         false,
         \\Logging out will only log you out of the account.
@@ -97,7 +108,7 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     const stdout = std.io.getStdOut().writer();
 
     // FIXME: Underline here has some weird behavior
-    const host = try prompt(
+    const host = try client.prompt(
         allocator,
         false,
         "{s}DotVC Sync host{s} (http(s)://dotvc.example.com): {s}",
@@ -109,19 +120,19 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         return;
     }
 
-    const username = try prompt(
+    const username = try client.prompt(
         allocator,
         false,
         "{s}{s}Username{s} (at least {} characters): ",
         .{ client.ANSI_RESET, client.ANSI_BOLD, client.ANSI_RESET, server_auth.MIN_USERNAME_LEN },
     );
-    const p1 = try prompt(
+    const p1 = try client.prompt(
         allocator,
         true,
         "{s}Password{s} (at least {} characters): ",
         .{ client.ANSI_BOLD, client.ANSI_RESET, server_auth.MIN_PASSWORD_LEN },
     );
-    const p2 = try prompt(
+    const p2 = try client.prompt(
         allocator,
         true,
         "{s}Repeat password{s}: ",
@@ -139,13 +150,23 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
     const hostname = try std.posix.gethostname(&hostname_buf);
 
-    const db_name_input = try prompt(
+    const db_name_input = try client.prompt(
         allocator,
         false,
         "{s}Machine name{s} (leave empty for \"{s}\"): ",
         .{ client.ANSI_BOLD, client.ANSI_RESET, hostname },
     );
     const db_name = if (db_name_input.len == 0) hostname else db_name_input;
+    const db_name_sentinel = try allocator.dupeZ(u8, db_name);
+
+    if (!try server_db.checkName(db_name_sentinel)) {
+        try stdout.print(
+            "{s}{s}Name has invalid characters or is too short!{s}\nOnly characters a-z, A-Z, 0-9, - and _ are allowed. Has to be at least 5 characters long.\n",
+            .{ client.ANSI_BOLD, client.ANSI_RED, client.ANSI_RESET },
+        );
+        return;
+    }
+
     const url = try std.mem.concat(
         allocator,
         u8,
@@ -180,7 +201,7 @@ fn register(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
 fn purge(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
     const stdout = std.io.getStdOut().writer();
 
-    const input = try prompt(
+    const input = try client.prompt(
         allocator,
         false,
         \\{s}{s}Warning!{s}
@@ -324,6 +345,7 @@ fn authenticate(
     } });
 }
 
+/// Verify DB name according to the regex
 fn timeStr(allocator: std.mem.Allocator, tz: *const zeit.TimeZone, timestamp: i64) !std.ArrayList(u8) {
     const zeit_timestamp = try zeit.instant(.{ .source = .{ .unix_timestamp = timestamp } });
     const local = zeit_timestamp.in(tz);
@@ -331,33 +353,4 @@ fn timeStr(allocator: std.mem.Allocator, tz: *const zeit.TimeZone, timestamp: i6
 
     try local.time().strftime(time.writer(), "%Y-%m-%d %H:%M:%S");
     return time;
-}
-
-fn prompt(allocator: std.mem.Allocator, hide_input: bool, comptime fmt: []const u8, args: anytype) ![]u8 {
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
-
-    try stdout.print(fmt, args);
-
-    const termios = try std.posix.tcgetattr(std.posix.STDOUT_FILENO);
-    if (hide_input) {
-        var t = termios;
-
-        // Disable echoing to hide password as it is being typed
-        t.lflag.ECHO = false;
-
-        try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, t);
-    }
-
-    const out = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 255) orelse {
-        try stdout.print("{s}Invalid input{s}\n", .{ client.ANSI_RED, client.ANSI_RESET });
-        std.process.exit(1);
-    };
-
-    if (hide_input) {
-        try std.posix.tcsetattr(std.posix.STDOUT_FILENO, std.posix.TCSA.NOW, termios);
-        try stdout.print("\n", .{});
-    }
-
-    return out;
 }

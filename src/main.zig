@@ -7,7 +7,7 @@ const client = @import("client/client.zig");
 
 // Recurse all tests from all files in the project
 comptime {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(daemon);
 }
 
 pub const Config = struct {
@@ -38,7 +38,7 @@ pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var app = yazap.App.init(allocator, "DotVC", "Version control for your dotfiles");
+    var app = yazap.App.init(allocator, "dotvc", "Version control for your dotfiles");
     defer app.deinit();
 
     var cli = app.rootCommand();
@@ -68,7 +68,7 @@ pub fn main() !u8 {
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommands(&.{ search_cli, kill_cli, daemon_cli, sync_cli, index_cli });
+    try cli.addSubcommands(&.{ daemon_cli, search_cli, kill_cli, sync_cli, index_cli });
 
     const matches = app.parseProcess() catch {
         return 1;

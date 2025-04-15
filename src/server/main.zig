@@ -8,6 +8,11 @@ const auth = @import("auth.zig");
 const cron = @import("cron.zig");
 const databases = @import("databases.zig");
 
+// Recurse all tests from all files in the project
+comptime {
+    std.testing.refAllDecls(databases);
+}
+
 const Config = struct {
     registrations_enabled: bool,
     port: u16,

@@ -6,11 +6,13 @@
     //
     // It is redundant to include "zig" in this name because it is already
     // within the Zig package namespace.
-    .name = "dotvc",
+    .name = .dotvc,
+
+    .fingerprint = 0x37f3efdb95534475,
 
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
-    .version = "0.0.0",
+    .version = "0.1.0",
 
     // This field is optional.
     // This is currently advisory only; Zig does not yet do anything
@@ -31,10 +33,6 @@
             .url = "git+https://github.com/prajwalch/yazap#306d8bf56bed528654977217827fb6ad03621538",
             .hash = "122019ea78cf9b4c722f2ca532e0104320dac5dbb8eac1bb8c69e5e827aeb411b7ef",
         },
-        .@"zig-toml" = .{
-            .url = "git+https://github.com/sam701/zig-toml#92b50b47233ab8b3cac127cbd2a21e68b5ffb95a",
-            .hash = "12201706c8eb1683204755109d1ae7087df48e6bf594c6d2aab6600b28e656df631e",
-        },
         .vaxis = .{
             .url = "git+https://github.com/rockorager/libvaxis?ref=zig-0.14.0#9ffbae61f46fba103b089b31fcbf7cea1ba35099",
             .hash = "1220ac04f500bd0ef76e24ee93dda2c46718db26eb2bceb2acb5e3694f98745ef8c1",
@@ -54,6 +52,14 @@
         .myzql = .{
             .url = "git+https://github.com/speed2exe/myzql?ref=main#d6c1f3ba3fb2896c5bbfaac96750b414f780492d",
             .hash = "12205d9e78e4951112a13ea04ef732b4415f4a60f18f5f886eaa38d3527063e4195f",
+        },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml#451fc7fb5ad302d3d83aeda234a8d15e792ca585",
+            .hash = "toml-0.0.0-bV14BfdxAQDXkZ5wL6eVO9zBz622SAdz_pcWuQmTAsMg",
+        },
+        .zregex = .{
+            .url = "git+https://github.com/thng292/zregex#b74f08ba48775a37d433eb607235a231ef1f3216",
+            .hash = "zregex-0.0.1-AAAAAG8nAAAmAgFlMSzgHiCJzfUbEX88MP_pLQ_GzNUA",
         },
     },
     .paths = .{
