@@ -22,6 +22,7 @@ pub const IpcMsg = union(enum) {
     purge_sync: struct {},
     sync_logout: struct {},
     get_sync_status: struct {},
+    sync_now: struct {},
 };
 
 pub const IpcGetDotfile = struct {
@@ -45,6 +46,7 @@ pub const IpcResponse = union(enum) {
 
 pub const IpcError = enum {
     invalid_database,
+    sync_failed,
 };
 
 pub const SyncStatus = union(enum) {
@@ -135,16 +137,16 @@ pub const Ipc = struct {
         while (true) {
             const socket =
                 std.posix.accept(
-                self.socket,
-                null,
-                null,
-                std.posix.SOCK.NONBLOCK,
-            ) catch |err| {
-                if (err != error.WouldBlock) {
-                    std.log.err("Unexpected IPC accept error: {}", .{err});
-                }
-                return;
-            };
+                    self.socket,
+                    null,
+                    null,
+                    std.posix.SOCK.NONBLOCK,
+                ) catch |err| {
+                    if (err != error.WouldBlock) {
+                        std.log.err("Unexpected IPC accept error: {}", .{err});
+                    }
+                    return;
+                };
             std.log.info("Accepted client connection: {}", .{socket});
             const buf = try self.allocator.alloc(u8, 2048);
             try self.clients.append(Client{
@@ -164,13 +166,13 @@ pub const Ipc = struct {
         for (self.clients.items) |*client| {
             const read =
                 std.posix.recv(client.socket, client.buf[client.offset..], std.posix.SOCK.NONBLOCK) catch |err| {
-                if (err == error.WouldBlock) {
-                    continue;
-                } else {
-                    std.log.info("Unexpected IPC recv error: {}", .{err});
-                    continue;
-                }
-            };
+                    if (err == error.WouldBlock) {
+                        continue;
+                    } else {
+                        std.log.info("Unexpected IPC recv error: {}", .{err});
+                        continue;
+                    }
+                };
 
             if (read == 0) {
                 try pending_disconnection.append(client);

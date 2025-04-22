@@ -3,8 +3,8 @@ const std = @import("std");
 const root = @import("../main.zig");
 const daemon = @import("daemon.zig");
 
-// FIXME: Needs a more sensible value for the actual default
-const DEFAULT_SYNC_INTERVAL = 10;
+// 30 minutes
+const DEFAULT_SYNC_INTERVAL = 1800;
 pub const AUX_DATABASE_PATH = "/sync_databases";
 const STATE_FILE = "sync_state.json";
 
@@ -189,103 +189,108 @@ pub const SyncManager = struct {
 
     pub fn syncPeriodic(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
         const elapsed = std.time.timestamp() - self.last_sync;
-        const state = self.state orelse return;
         const sync_interval = self.config.sync_interval orelse DEFAULT_SYNC_INTERVAL;
 
         if (elapsed >= sync_interval) {
-            std.log.info("Syncing aux databases...", .{});
-            if (self.local_sync_queued) {
-                try self.syncLocal(loop_alloc);
+            try self.sync(loop_alloc);
+        }
+    }
+
+    pub fn sync(self: *SyncManager, loop_alloc: std.mem.Allocator) !void {
+        const state = self.state orelse return;
+
+        std.log.info("Syncing aux databases...", .{});
+        if (self.local_sync_queued) {
+            try self.syncLocal(loop_alloc);
+        }
+        self.last_sync = std.time.timestamp();
+
+        const manifest_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/manifest" });
+
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+
+        var body = std.ArrayList(u8).init(arena.allocator());
+        const res = try self.client.fetch(.{
+            .location = .{ .url = manifest_url },
+            .method = .GET,
+            .response_storage = .{ .dynamic = &body },
+            .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }},
+        });
+
+        if (res.status != .ok) {
+            std.log.err("Fetching database manifest failed: {}, {s}", .{ res.status, body.items });
+            return;
+        }
+
+        const manifests = try std.json.parseFromSliceLeaky([]Manifest, arena.allocator(), body.items, .{});
+        var databases_to_sync = std.ArrayList([]const u8).init(loop_alloc);
+
+        // FIXME: Logic is a bit unsound when it comes to databases being deleted server-side
+        // should be looked into
+        for (manifests) |manifest| {
+            var found = false;
+            if (self.last_sync_manifests) |last_manifests| {
+                for (last_manifests.value) |last_manifest| {
+                    if (std.mem.eql(u8, last_manifest.name, manifest.name)) {
+                        if (last_manifest.timestamp < manifest.timestamp) {
+                            try databases_to_sync.append(manifest.name);
+                        }
+                        found = true;
+                    }
+                }
             }
-            self.last_sync = std.time.timestamp();
 
-            const manifest_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/manifest" });
+            if (!found) {
+                try databases_to_sync.append(manifest.name);
+            }
+        }
 
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
-
-            var body = std.ArrayList(u8).init(arena.allocator());
-            const res = try self.client.fetch(.{
-                .location = .{ .url = manifest_url },
+        for (databases_to_sync.items) |db_name| {
+            if (std.mem.eql(u8, db_name, state.value.db_name)) {
+                continue;
+            }
+            var db_body = std.ArrayList(u8).init(loop_alloc);
+            const db_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/download/", db_name });
+            const db_res = try self.client.fetch(.{
+                .location = .{ .url = db_url },
                 .method = .GET,
-                .response_storage = .{ .dynamic = &body },
+                .response_storage = .{ .dynamic = &db_body },
                 .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }},
             });
 
-            if (res.status != .ok) {
-                std.log.err("Fetching database manifest failed: {}, {s}", .{ res.status, body.items });
-                return;
-            }
+            const aux_dbs = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, AUX_DATABASE_PATH });
+            try std.fs.cwd().makePath(aux_dbs);
 
-            const manifests = try std.json.parseFromSliceLeaky([]Manifest, arena.allocator(), body.items, .{});
-            var databases_to_sync = std.ArrayList([]const u8).init(loop_alloc);
+            const db_path = try std.mem.concat(loop_alloc, u8, &.{ aux_dbs, "/", db_name, daemon.DB_EXTENSION });
 
-            // FIXME: Logic is a bit unsound when it comes to databases being deleted server-side
-            // should be looked into
-            for (manifests) |manifest| {
-                var found = false;
-                if (self.last_sync_manifests) |last_manifests| {
-                    for (last_manifests.value) |last_manifest| {
-                        if (std.mem.eql(u8, last_manifest.name, manifest.name)) {
-                            if (last_manifest.timestamp < manifest.timestamp) {
-                                try databases_to_sync.append(manifest.name);
-                            }
-                            found = true;
-                        }
+            if (db_res.status == .gone) {
+                std.log.info("Database removed from server, removing...", .{});
+                std.fs.cwd().deleteFile(db_path) catch |err| {
+                    if (err != error.FileNotFound) {
+                        std.log.err("Unexpected I/O error occurred: {}", .{err});
                     }
-                }
+                };
+            } else if (db_res.status != .ok) {
+                std.log.err("Error fetching aux database: {}", .{res.status});
+            } else {
+                var file = try std.fs.cwd().createFile(db_path, .{});
 
-                if (!found) {
-                    try databases_to_sync.append(manifest.name);
-                }
+                var fbs = std.io.fixedBufferStream(db_body.items);
+                var decompressed = std.ArrayList(u8).init(loop_alloc);
+
+                try std.compress.gzip.decompress(fbs.reader(), decompressed.writer());
+
+                try file.writeAll(decompressed.items);
             }
-
-            for (databases_to_sync.items) |db_name| {
-                if (std.mem.eql(u8, db_name, state.value.db_name)) {
-                    continue;
-                }
-                var db_body = std.ArrayList(u8).init(loop_alloc);
-                const db_url = try std.mem.concat(loop_alloc, u8, &.{ state.value.host, "/databases/download/", db_name });
-                const db_res = try self.client.fetch(.{
-                    .location = .{ .url = db_url },
-                    .method = .GET,
-                    .response_storage = .{ .dynamic = &db_body },
-                    .extra_headers = &.{std.http.Header{ .name = "Token", .value = state.value.token }},
-                });
-
-                const aux_dbs = try std.mem.concat(loop_alloc, u8, &.{ self.data_dir, AUX_DATABASE_PATH });
-                try std.fs.cwd().makePath(aux_dbs);
-
-                const db_path = try std.mem.concat(loop_alloc, u8, &.{ aux_dbs, "/", db_name, daemon.DB_EXTENSION });
-
-                if (db_res.status == .gone) {
-                    std.log.info("Database removed from server, removing...", .{});
-                    std.fs.cwd().deleteFile(db_path) catch |err| {
-                        if (err != error.FileNotFound) {
-                            std.log.err("Unexpected I/O error occurred: {}", .{err});
-                        }
-                    };
-                } else if (db_res.status != .ok) {
-                    std.log.err("Error fetching aux database: {}", .{res.status});
-                } else {
-                    var file = try std.fs.cwd().createFile(db_path, .{});
-
-                    var fbs = std.io.fixedBufferStream(db_body.items);
-                    var decompressed = std.ArrayList(u8).init(loop_alloc);
-
-                    try std.compress.gzip.decompress(fbs.reader(), decompressed.writer());
-
-                    try file.writeAll(decompressed.items);
-                }
-            }
-
-            if (self.last_sync_manifests) |last_manifests| {
-                last_manifests.deinit();
-            }
-
-            self.last_sync_manifests = .{
-                .arena = arena,
-                .value = manifests,
-            };
         }
+
+        if (self.last_sync_manifests) |last_manifests| {
+            last_manifests.deinit();
+        }
+
+        self.last_sync_manifests = .{
+            .arena = arena,
+            .value = manifests,
+        };
     }
 };

@@ -1,6 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 const toml = @import("zig-toml");
+const Regex = @import("zregex");
 
 const ipc = @import("ipc.zig");
 const inotify = @import("inotify.zig");
@@ -270,6 +271,15 @@ pub fn run(allocator: std.mem.Allocator, config_path: []const u8, cli_data_dir: 
                             });
                         }
                     },
+                    .sync_now => blk: {
+                        sync_manager.sync(loop_alloc) catch |err| {
+                            std.log.err("Failed to sync: {}", .{err});
+                            try msg.client.reply(.{ .err = .sync_failed });
+                            break :blk;
+                        };
+
+                        try msg.client.reply(.{ .ok = .{} });
+                    },
                 }
             }
         } else |err| {
@@ -321,10 +331,15 @@ fn indexFile(
     db: *database.Database,
     config: *const root.Config,
 ) !bool {
+    const name_z = try loop_alloc.dupeZ(u8, name);
+
     var match = false;
     if (watch_path.ignore) |ignore| {
         for (ignore) |pattern| {
-            if (glob(pattern, name)) {
+            const pat_z = try loop_alloc.dupeZ(u8, pattern);
+            const re = try Regex.init(pat_z, .{ .extended = true });
+            defer re.deinit();
+            if (re.match(name_z, .{})) {
                 match = true;
                 break;
             }
@@ -332,7 +347,10 @@ fn indexFile(
     }
 
     for (config.global_ignore) |pattern| {
-        if (glob(pattern, name)) {
+        const pat_z = try loop_alloc.dupeZ(u8, pattern);
+        const re = try Regex.init(pat_z, .{ .extended = true });
+        defer re.deinit();
+        if (re.match(name_z, .{})) {
             match = true;
             break;
         }
@@ -367,83 +385,4 @@ fn indexFile(
         .date = date,
     });
     return true;
-}
-
-/// Supports simple globbing, wildcards at either end or at both of the pattern
-fn glob(pattern: []const u8, string: []const u8) bool {
-    const wild_start = pattern[0] == '*';
-    const wild_end = pattern[pattern.len - 1] == '*';
-    const matchable_length = pattern.len - @intFromBool(wild_start) - @intFromBool(wild_end);
-
-    var matched: u32 = 0;
-    if (wild_start and wild_end) {
-        for (string) |chr| {
-            if (chr == pattern[matched + @intFromBool(wild_start)]) {
-                matched += 1;
-                if (matched == matchable_length) {
-                    return true;
-                }
-            } else {
-                matched = 0;
-            }
-        }
-        return false;
-    } else if (wild_end) {
-        for (string) |chr| {
-            if (chr == pattern[matched]) {
-                matched += 1;
-            } else {
-                break;
-            }
-        }
-        return matched == matchable_length;
-    } else if (wild_start) {
-        var i = string.len;
-        var pat_i = pattern.len;
-        while (i > 0) {
-            i -= 1;
-            pat_i -= 1;
-
-            if (string[i] == pattern[pat_i]) {
-                matched += 1;
-            } else {
-                break;
-            }
-        }
-        return matched == matchable_length;
-    } else {
-        return std.mem.eql(u8, pattern, string);
-    }
-}
-
-const expect = std.testing.expect;
-
-test "glob start and end" {
-    try expect(glob("*test*", "test"));
-    try expect(glob("*test*", "___test"));
-    try expect(glob("*test*", "test___"));
-    try expect(glob("*test*", "___test___"));
-    try expect(glob("*test*", "___testtest___"));
-    try expect(!glob("*test*", ""));
-}
-
-test "glob start" {
-    try expect(glob("*test", "_____test"));
-    try expect(glob("*test", "test"));
-    try expect(!glob("*test", "_____test_"));
-    try expect(!glob("*test", "test_"));
-}
-
-test "glob end" {
-    try expect(glob("test*", "test"));
-    try expect(!glob("test*", "_____test"));
-    try expect(!glob("test*", "_____test_"));
-    try expect(glob("test*", "test_"));
-    try expect(glob("test*", "test______"));
-    try expect(glob("test*", "test______"));
-}
-
-test "glob none" {
-    try expect(glob("test", "test"));
-    try expect(!glob("test", "tes"));
 }

@@ -59,8 +59,9 @@ pub fn main() !u8 {
         const unregister_cli = app.createCommand("delete-account", "Delete account and all data associated with it");
         const purge_cli = app.createCommand("purge", "Delete all data related to the current system from the sync server");
         const status_cli = app.createCommand("status", "View sync status");
+        const now_cli = app.createCommand("now", "Sync remote databases now");
 
-        try sync_cli.addSubcommands(&.{ login_cli, logout_cli, register_cli, unregister_cli, purge_cli, status_cli });
+        try sync_cli.addSubcommands(&.{ login_cli, logout_cli, register_cli, unregister_cli, purge_cli, status_cli, now_cli });
     }
 
     const kill_cli = app.createCommand("kill", "Gracefully shutdown the daemon");

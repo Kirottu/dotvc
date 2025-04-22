@@ -1,7 +1,6 @@
 const std = @import("std");
 const yazap = @import("yazap");
 const zeit = @import("zeit");
-const tiny_regex = @cImport(@cInclude("tiny-regex/re.h"));
 
 const client = @import("client.zig");
 const sync = @import("../daemon/sync.zig");
@@ -19,6 +18,7 @@ pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches
 
     defer arena.deinit();
 
+    // This looks ugly but I don't think there is a way around this
     if (matches.subcommandMatches("login")) |_| {
         try login(arena_alloc, socket);
     } else if (matches.subcommandMatches("logout")) |_| {
@@ -29,6 +29,8 @@ pub fn syncCli(allocator: std.mem.Allocator, socket: std.posix.socket_t, matches
         try purge(arena_alloc, socket);
     } else if (matches.subcommandMatches("status")) |_| {
         try status(arena_alloc, socket);
+    } else if (matches.subcommandMatches("now")) |_| {
+        try now(arena_alloc, socket);
     }
 }
 
@@ -299,6 +301,16 @@ fn status(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
             }
         },
     }
+}
+
+fn now(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    try stdout.print("Syncing remote databases now!\n\n", .{});
+
+    _ = try client.ipcMessage(allocator, socket, .{ .sync_now = .{} });
+
+    try status(allocator, socket);
 }
 
 /// Helper function to authenticate the daemon

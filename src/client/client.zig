@@ -43,6 +43,9 @@ pub fn prompt(allocator: std.mem.Allocator, hide_input: bool, comptime fmt: []co
 }
 
 pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg: ipc.IpcMsg) !root.ArenaAllocated(ipc.IpcResponse) {
+    // Data is read from the sockets in chunks of this size
+    const read_chunk = 16384;
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     const arena_alloc = arena.allocator();
     var buf = std.ArrayList(u8).init(allocator);
@@ -52,14 +55,14 @@ pub fn ipcMessage(allocator: std.mem.Allocator, socket: std.posix.socket_t, msg:
 
     _ = try std.posix.send(socket, buf.items, 0);
 
-    var read_buf = try arena_alloc.alloc(u8, 2048);
+    var read_buf = try arena_alloc.alloc(u8, read_chunk);
 
     var offset: usize = 0;
     while (true) {
         const read = try std.posix.recv(socket, read_buf[offset..], 0);
         offset += read;
-        if (read == read_buf.len) {
-            read_buf = try arena_alloc.realloc(read_buf, read_buf.len + 2048);
+        if (read == read_chunk) {
+            read_buf = try arena_alloc.realloc(read_buf, read_buf.len + read_chunk);
         } else {
             break;
         }
@@ -95,6 +98,7 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
 
     if (matches.subcommandMatches("search")) |search_matches| {
         var state = search.State.init(allocator, socket, config, search_matches.getSingleValue("database")) catch |err| {
+            std.log.err("{}", .{err});
             if (err == search.SearchError.InvalidDatabase) {
                 std.log.err("Invalid database name specified.", .{});
             }

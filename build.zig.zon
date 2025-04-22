@@ -30,8 +30,8 @@
             .hash = "1220bbf36166a56f03ca55c2f455f70cdb3dd5f8dca1f7c78e57d9402add9635b2b9",
         },
         .yazap = .{
-            .url = "git+https://github.com/prajwalch/yazap#306d8bf56bed528654977217827fb6ad03621538",
-            .hash = "122019ea78cf9b4c722f2ca532e0104320dac5dbb8eac1bb8c69e5e827aeb411b7ef",
+            .url = "git+https://github.com/prajwalch/yazap?ref=v0.6.3#71490491b8f1b0741218160b88cf0a87d2a941ce",
+            .hash = "yazap-0.6.3-Z1t-EiLlAQCR5mUSOlF1PovnwyPcIUGeV02lAIVMUEOc",
         },
         .vaxis = .{
             .url = "git+https://github.com/rockorager/libvaxis?ref=zig-0.14.0#9ffbae61f46fba103b089b31fcbf7cea1ba35099",
