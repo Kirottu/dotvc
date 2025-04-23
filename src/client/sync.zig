@@ -214,8 +214,7 @@ fn purge(allocator: std.mem.Allocator, socket: std.posix.socket_t) !void {
         \\ - The remote databases on the local machine
         \\ - Local configuration of the sync connection
         \\
-        \\To proceed, type {s}{s}{s}: 
-        \\
+        \\To proceed, type `{s}{s}{s}`: 
     ,
         .{ client.ANSI_RED, client.ANSI_BOLD, client.ANSI_RESET, client.ANSI_BOLD, PURGE_CHALLENGE, client.ANSI_RESET },
     );
