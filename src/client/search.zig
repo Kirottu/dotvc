@@ -13,6 +13,10 @@ const BANNER_STR = "DotVC v0.1.0alpha ";
 const HELP_KEYBIND_STR = " Press '?' for help ";
 const TIME_FMT = "%Y-%m-%d %H:%M:%S";
 
+const PAGE_KEY_SCROLL_AMOUNT = 10;
+const SCROLL_BOTTOM_OFFSET = 7; // Offset of total height to use for scroll management
+const SCROLL_TOP_OFFSET = 4;
+
 const KeybindHelp = struct {
     keybind: []const u8,
     help: []const u8,
@@ -93,6 +97,7 @@ pub const State = struct {
 
     show_help: bool,
 
+    scroll_start: usize,
     selected_entry: usize,
     text_input: vaxis.widgets.TextInput,
     searcher: fuzzig.Ascii,
@@ -146,6 +151,7 @@ pub const State = struct {
             },
             .search_results = null,
             .selected_entry = 0,
+            .scroll_start = 0,
 
             .show_help = false,
 
@@ -202,17 +208,10 @@ pub const State = struct {
                             try self.openEditor(event_alloc);
                             try loop.start();
                         },
-                        vaxis.Key.up => {
-                            if (self.selected_entry > 0) {
-                                self.selected_entry -= 1;
-                            }
-                        },
-                        vaxis.Key.down => {
-                            const max_index = (if (self.search_results) |results| results.value.len else self.ipc_dotfiles.value.len) - 1;
-                            if (self.selected_entry < max_index) {
-                                self.selected_entry += 1;
-                            }
-                        },
+                        vaxis.Key.up => self.selectAndScroll(-1),
+                        vaxis.Key.down => self.selectAndScroll(1),
+                        vaxis.Key.page_up => self.selectAndScroll(-PAGE_KEY_SCROLL_AMOUNT),
+                        vaxis.Key.page_down => self.selectAndScroll(PAGE_KEY_SCROLL_AMOUNT),
                         else => {
                             if (key.matches('c', .{ .ctrl = true })) {
                                 break;
@@ -274,10 +273,12 @@ pub const State = struct {
                     );
                 }
             } else {
-                for (0.., self.ipc_dotfiles.value) |line, dotfile| {
-                    if (line > content.height) {
+                for (self.scroll_start..self.ipc_dotfiles.value.len) |line| {
+                    if (line > content.height + self.scroll_start) {
                         break;
                     }
+
+                    const dotfile = self.ipc_dotfiles.value[line];
 
                     const tags_str =
                         try std.mem.join(event_alloc, ", ", dotfile.tags);
@@ -293,7 +294,7 @@ pub const State = struct {
                         tags_str,
                         time_str.items,
                         null,
-                        @intCast(line),
+                        @intCast(line - self.scroll_start),
                     );
                 }
             }
@@ -377,6 +378,25 @@ pub const State = struct {
         }
     }
 
+    fn selectAndScroll(self: *State, amount: isize) void {
+        const max_index = (if (self.search_results) |results| results.value.len else self.ipc_dotfiles.value.len) - 1;
+        const sel_in_screen = self.vx.screen.height + self.scroll_start - self.selected_entry;
+
+        if (amount < 0) {
+            if (-amount > self.selected_entry) {
+                self.selected_entry = 0;
+            } else {
+                self.selected_entry -= @intCast(-amount);
+            }
+        } else {
+            if (self.selected_entry + @as(usize, @intCast(amount)) > max_index) {
+                self.selected_entry = max_index;
+            } else {
+                self.selected_entry += @as(usize, @intCast(amount));
+            }
+        }
+    }
+
     fn drawResult(
         self: *State,
         win: vaxis.Window,
@@ -395,7 +415,7 @@ pub const State = struct {
         _ = win.printSegment(.{
             .text = path,
             .style = .{
-                .reverse = line == self.selected_entry,
+                .reverse = line == self.selected_entry - self.scroll_start,
             },
         }, .{
             .row_offset = line,
@@ -436,7 +456,7 @@ pub const State = struct {
                     .{ .text = combined[i .. i + 1], .style = .{
                         .bold = true,
                         .fg = .{ .index = @intFromEnum(Color.bright_red) },
-                        .reverse = line == self.selected_entry,
+                        .reverse = line == self.selected_entry - self.scroll_start,
                     } },
                     .{ .row_offset = line, .col_offset = @intCast(offset) },
                 );

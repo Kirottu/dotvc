@@ -49,6 +49,8 @@ pub fn main() !u8 {
     var search_cli = app.createCommand("search", "Interactively search for dotfiles");
     try search_cli.addArg(yazap.Arg.singleValueOption("database", 'd', "Specify which database to use, hostnames are used as database names"));
 
+    const reload_cli = app.createCommand("reload", "Reload daemon configuration");
+
     var sync_cli = app.createCommand("sync", "Manage DotVC Sync connection");
     const index_cli = app.createCommand("index", "Create new revisions for all watch paths in the database");
     sync_cli.setProperty(.subcommand_required);
@@ -69,7 +71,7 @@ pub fn main() !u8 {
     var daemon_cli = app.createCommand("daemon", "Run the dotvc daemon");
     try daemon_cli.addArg(yazap.Arg.singleValueOption("data-dir", 'd', "Override the default directory where the database is stored"));
 
-    try cli.addSubcommands(&.{ daemon_cli, search_cli, kill_cli, sync_cli, index_cli });
+    try cli.addSubcommands(&.{ daemon_cli, search_cli, reload_cli, kill_cli, sync_cli, index_cli });
 
     const matches = app.parseProcess() catch {
         return 1;

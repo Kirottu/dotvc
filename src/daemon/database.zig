@@ -94,7 +94,6 @@ pub const Database = struct {
             .date = dotfile.date,
         });
         const id = self.db.getLastInsertRowID();
-        std.log.info("{}", .{id});
         var insert_tag = try self.db.prepare(
             \\INSERT INTO tags(dotfile_id, name) VALUES(?, ?);  
         );

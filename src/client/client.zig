@@ -86,9 +86,9 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
 
     const socket = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
     const addr = try std.net.Address.initUnix(ipc.SOCKET_PATH);
-    std.posix.connect(socket, &addr.any, addr.getOsSockLen()) catch |err| {
-        const stdout = std.io.getStdOut().writer();
+    const stdout = std.io.getStdOut().writer();
 
+    std.posix.connect(socket, &addr.any, addr.getOsSockLen()) catch |err| {
         try stdout.print(
             "{s}{s}Failed to connect to daemon!{s}: {}\n\nIs the daemon running?\n",
             .{ ANSI_RED, ANSI_BOLD, ANSI_RESET, err },
@@ -118,6 +118,10 @@ pub fn run(allocator: std.mem.Allocator, matches: yazap.ArgMatches, config_path:
 
         if (res.len == 1 and (res[0] == 'y' or res[0] == 'Y')) {
             _ = try ipcMessage(allocator, socket, .{ .index_all = .{} });
+            try stdout.print("Success\n", .{});
         }
+    } else if (matches.subcommandMatches("reload")) |_| {
+        _ = try ipcMessage(allocator, socket, .{ .reload_config = .{} });
+        try stdout.print("Reloaded config!\n", .{});
     }
 }

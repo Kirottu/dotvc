@@ -360,10 +360,14 @@ fn indexFile(
         return false;
     }
 
-    const path = try std.mem.concat(
+    const path = if (ancestor[ancestor.len - 1] == '/') try std.mem.concat(
         loop_alloc,
         u8,
         &.{ ancestor, name },
+    ) else try std.mem.concat(
+        loop_alloc,
+        u8,
+        &.{ ancestor, "/", name },
     );
 
     std.log.info("Adding revision for {s} to database", .{path});
